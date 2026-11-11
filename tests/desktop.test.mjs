@@ -474,9 +474,9 @@ test('A7 on-order note uses only positive selected-horizon receipts and the sele
 
 test('A7 headline keeps exact sample numbers and explains short runway', () => {
   const all = nodes(renderComponent('Page', { ctx: { storage } }))
-  assert.ok(textValues(all).includes('8,269 m left · sells about 12,571 m a month · less than a month left'))
+  assert.ok(textValues(all).includes('8,269 m left · sells about 14,153 m a month · less than a month left'))
   const longer = nodes(renderComponent('Page', { ctx: { storage } }, { 4: 'TRM-ALU-25' }))
-  assert.ok(textValues(longer).includes('1,125 m left · sells about 229 m a month'))
+  assert.ok(textValues(longer).includes('1,125 m left · sells about 153 m a month'))
 })
 
 for (const [stock, sales, short] of [[5, 10, true], [10, 10, false], [20, 10, false], [5, 0, false], [0, 0, true]]) {
@@ -573,15 +573,15 @@ test('A7 held items have no invented action, receipt quantity, or headline', () 
 
 test('stock line stops at the interpolated first-month zero crossing', () => {
   const item = sampleResults().find(row => row.stock === 8269)
-  assert.equal(item.monthly_demand, 12571)
+  assert.equal(item.monthly_demand, 14153)
   const path = stockPath(item)
   assert.equal(path.points.length, 2)
-  assert.ok(Math.abs(path.crossing.month - 0.658) < 0.001)
-  assert.equal(path.crossing.month, 8269 / 12571)
+  assert.ok(Math.abs(path.crossing.month - 0.584) < 0.001)
+  assert.equal(path.crossing.month, 8269 / 14153)
   assert.equal(path.crossing.label, '2026-11')
   assert.equal(path.points.at(-1).stock, 0)
   assert.ok(path.points.every(point => point.stock >= 0))
-  assert.equal(item.projection[0].stock, -4302, 'plot clipping never mutates the engine projection')
+  assert.equal(item.projection[0].stock, -5884, 'plot clipping never mutates the engine projection')
 })
 test('stock path handles later crossings, exact zero, empty stock and no crossing', () => {
   const item = { stock: 15, projection: [{ month: '2026-11', stock: 5 }, { month: '2026-12', stock: -5 }, { month: '2027-01', stock: 20 }] }
@@ -867,7 +867,7 @@ test('embedded sample equals the complete shipped dataset, receipts are objects'
   assert.ok(SAMPLE.items.every(item => !Array.isArray(item.receipts) && typeof item.receipts === 'object'))
 })
 test('JS engine independently matches all five oracle rows', () => {
-  const expected = [[25860,4911,'2027-04',9],[8269,12571,'2026-11',15],[1863,600,'2027-02',13],[1125,229,'2027-03',21],[548,391,'2026-12',75]]
+  const expected = [[25860,5689,'2027-04',9],[8269,14153,'2026-11',15],[1863,295,'2027-04',13],[1125,153,'2027-05',21],[548,633,'2026-11',75]]
   const result = calculate(SAMPLE.items, SAMPLE.months, SAMPLE.as_of, 12)
   assert.deepEqual(plain(result.map(x => [x.stock, x.monthly_demand, x.runout_month, x.error_percent])), expected)
   assert.equal(label('2027-04'), 'Apr 2027')
@@ -1149,13 +1149,13 @@ test('selected aluminium keeps its oracle values, units and all twelve months', 
   const all = nodes(renderComponent('Page', { ctx: { storage } }, { 0: 820, 3: 12, 4: 'TRM-ALU-25' }))
   assert.ok(all.some(n => n.type === 'h2' && n.props.children === 'Aluminium edge trim · SKU TRM-ALU-25'))
   assert.ok(all.some(n => n.props?.role === 'status' && /^(Order |Out of stock — Order |No order needed —)/.test(n.props.children)))
-  assert.ok(all.some(n => n.props?.children === '1,125 m left · sells about 229 m a month'))
+  assert.ok(all.some(n => n.props?.children === '1,125 m left · sells about 153 m a month'))
   const table = all.find(n => n.type?.name === 'DataTable' && n.props.title === 'Month by month: stock, sales, deliveries')
   assert.equal(table.props.rows.length, 12 + 1 + 12)
   assert.equal(table.props.rowStates[12], 'now')
-  assert.deepEqual(plain(table.props.rowStates.slice(-12)), [...Array(4).fill(''), 'first-out', ...Array(7).fill('out')])
-  assert.deepEqual(plain(table.props.rows[17]), ['Mar 2027 · Forecast', '229 m', '0 m', 'Out of stock · short 20 m'])
-  assert.equal(table.props.rows.at(-1)[3], 'Out of stock · short 1,623 m')
+  assert.deepEqual(plain(table.props.rowStates.slice(-12)), [...Array(6).fill(''), 'first-out', ...Array(5).fill('out')])
+  assert.deepEqual(plain(table.props.rows[17]), ['Mar 2027 · Forecast', '112 m', '0 m', '340 m'])
+  assert.equal(table.props.rows.at(-1)[3], 'Out of stock · short 1,468 m')
   assert.ok(all.some(n => n.type === 'details' && nodes(n).some(c => c.props?.children === 'How the forecast works')))
 })
 test('depletion row is distinguished by text and a strong rule, with no red later-date blanket', () => {
@@ -1380,8 +1380,8 @@ test('disclosure remains keyboard-accessible and source errors and empty states 
 })
 test('every priority date has plain urgency and every confidence uses neutral presentation', () => {
   const all = nodes(renderComponent('Page', { ctx: { storage } }, { 0: 1440 }))
-  assert.ok(all.some(n => n.props?.children === 'Runs out Dec 2026'))
-  assert.ok(all.some(n => n.props?.children === 'Runs out Mar 2027'))
+  assert.ok(all.some(n => n.props?.children === 'Runs out Nov 2026'))
+  assert.ok(all.some(n => n.props?.children === 'Runs out May 2027'))
   const { ctx } = registered()
   const view = ctx.entries.find(e => e.area === 'transcriptDirectives').data.render({ attrs: rawAttrs(fixture()) })
   assert.ok(nodes(view.type(view.props)).filter(n => n.type?.name === 'Badge').every(n => n.props.variant === 'muted'))
@@ -1450,7 +1450,7 @@ test('A4 month-end points sit on full-month boundaries and desktop plot is two t
     assert.ok(bars[i].props.x+bars[i].props.width <= grid.x1+(i+1)*slot)
   }
   const crossing = all.find(n=>n.props?.['data-runout']).props.cx
-  assert.ok(Math.abs((crossing-divider.x1)/slot-8269/12571)<1e-9)
+  assert.ok(Math.abs((crossing-divider.x1)/slot-8269/14153)<1e-9)
   const caption = all.find(n=>n.type==='figcaption')
   assert.deepEqual(nodes(caption).filter(n=>n.type==='span' && Array.isArray(n.props.children)).map(n=>n.props.children[1]),
     ['Past demand','Forecast demand','Deliveries','Stock on hand'])
@@ -1484,12 +1484,12 @@ test('A4 supplier lead time affects urgency and existing forecast holds are resp
 })
 
 test('A4 first and later runouts retain their fraction of the full calendar month at phone widths', () => {
-  for (const width of [328,358,1100]) for (const [sku, expected] of [['UL-FOAM-GRN',8269/12571],['TRM-ALU-25',1125/229]]) {
-    const item = sampleResults().find(r=>r.sku===sku)
+  for (const width of [328,358,1100]) for (const [sku, expected] of [['UL-FOAM-GRN',8269/14153],['TRM-ALU-25',6+42/279]]) {
+    const item = calculate(SAMPLE.items,SAMPLE.months,SAMPLE.as_of,12).find(r=>r.sku===sku)
     const all = nodes(renderComponent('Chart',{item,months:SAMPLE.months},{0:width}))
     const divider = all.find(n=>n.props?.['data-now-divider']).props
     const grid = all.find(n=>n.type==='line' && n.props.stroke==='var(--ui-stroke-secondary)').props
-    const slot = (grid.x2-grid.x1)/(12+6)
+    const slot = (grid.x2-grid.x1)/(12+12)
     const marker = all.find(n=>n.props?.['data-runout']).props.cx
     assert.ok(Math.abs((marker-divider.x1)/slot-expected)<1e-9)
     const bandStart = divider.x1+Math.floor(expected)*slot
@@ -2098,4 +2098,105 @@ test('controls audit: every disclosure header is at least 40px tall', () => {
   assert.ok(summaries.length >= 6)
   for (const s of summaries) assert.match(s, /summaryHit/, s)
   assert.match(source, /const summaryHit = \{[^}]*minHeight: 40/)
+})
+
+test('seasonal factors, clamps, zero, fallback and deseasonalised level use independent oracles', () => {
+  vm.runInContext('globalThis.seasonalHelpers={demandModel,monthDemand}', context)
+  const {demandModel,monthDemand}=context.seasonalHelpers
+  for (const [sales,seasonal,level,demands] of [
+    [[50,150,...Array(10).fill(100)],true,100,[50,150]],
+    [[0,1000,...Array(10).fill(10)],true,20,[10,40]],
+    [Array(12).fill(0),true,0,[0,0]],
+    [Array(12).fill(0.1),true,0.1,[1,1]],
+    [Array(11).fill(10),false,10,[10,10]],
+    [Array(3).fill(1.0000000000000002),false,1.0000000000000002,[2,2]],
+  ]) {
+    const model=demandModel(sales,'2026-12')
+    assert.equal(model.seasonal,seasonal)
+    assert.ok(Math.abs(model.level-level)<1e-12)
+    assert.ok(model.factors.every(f=>f>=0.5&&f<=2))
+    assert.deepEqual([monthDemand(model,'2027-01'),monthDemand(model,'2027-02')],demands)
+  }
+  assert.deepEqual(plain(demandModel([50,150,...Array(10).fill(100)],'2026-12').factors),[0.5,1.5,...Array(10).fill(1)])
+})
+
+test('seasonal order quantity sums full differing months and actual partial-month days', () => {
+  const months=Array.from({length:12},(_,i)=>`2026-${String(i+1).padStart(2,'0')}`)
+  const raw={sku:'SYN',name:'Synthetic',unit:'m',on_hand:0,supplier_days:0,monthly_sales:[50,150,...Array(10).fill(100)],receipts:{}}
+  const item=calculate([raw],months,'2026-12-31',6)[0]
+  const settings={...context.helpers.DEFAULT_ORDER_SETTINGS,months_of_cover:2}
+  const guidance=context.helpers.orderGuidance(item,'2027-01-01',settings)
+  assert.equal(guidance.endpoint,'2027-03-02')
+  assert.equal(guidance.quantity,207) // ceil(50 + 150 + 100*2/31)
+  assert.equal(guidance.runout_date,'2027-01-01')
+  const incoming=calculate([{...raw,receipts:{'2027-02':10}}],months,'2026-12-31',6)[0]
+  assert.equal(context.helpers.orderGuidance(incoming,'2027-01-01',settings).quantity,197)
+  assert.equal(context.helpers.orderGuidance(item,'2027-01-01',{...settings,product_overrides:{SYN:{minimum_order:220,pack_size:12}}}).quantity,228)
+  for (const [sales,expected] of [[[150,50,...Array(10).fill(100)],'2027-01-16'],[[50,150,...Array(10).fill(100)],'2027-02-05']]) {
+    const row=calculate([{...raw,on_hand:75,monthly_sales:sales}],months,'2026-12-31',6)[0]
+    assert.equal(row.runout_day,expected)
+    assert.equal(context.helpers.orderGuidance(row,'2026-12-31',settings).runout_date,expected)
+  }
+  const sample=sampleResults()[0]
+  assert.deepEqual(plain(sample.projection.map(r=>r.demand)),[5689,4789,5282,5523,4504,3962])
+  assert.equal(sample.runout_day,'2027-04-01')
+})
+
+test('seasonal Python/JS sample and synthetic stress parity, including decimals and year 9998', async () => {
+  const {spawnSync}=await import('node:child_process')
+  const cases=[{items:plain(SAMPLE.items),months:plain(SAMPLE.months),as_of:SAMPLE.as_of}]
+  for (const fixture of Object.values(visualStress)) if(fixture?.items?.length) cases.push({...fixture,items:fixture.items.slice(0,8)})
+  const months=Array.from({length:12},(_,i)=>`9998-${String(i+1).padStart(2,'0')}`)
+  for (const sales of [Array(12).fill(0),Array(12).fill(0.1),[1e12,0.000001,...Array(10).fill(999999999999.9999)]])
+    cases.push({months,as_of:'9998-12-31',items:[{sku:'EDGE',name:'Synthetic',unit:'m',on_hand:100,supplier_days:0,monthly_sales:sales,receipts:{}}]})
+  const py=spawnSync(process.env.PYTHON||'python3',['-c','import json,sys; from engine import forecast; data=json.load(sys.stdin); print(json.dumps([[forecast(i,d["months"],d["as_of"],12) for i in d["items"]] for d in data]))'],{input:JSON.stringify(cases),encoding:'utf8'})
+  assert.equal(py.status,0,py.stderr)
+  const expected=JSON.parse(py.stdout)
+  cases.forEach((d,c)=>calculate(d.items,d.months,d.as_of,12).forEach((row,i)=>{
+    assert.equal(row.held,expected[c][i].held,`held case ${c}/${i}`)
+    if (!row.held) for(const key of ['monthly_demand','seasonal','projection','runout_day','order_by','error_percent','grade'])
+      assert.deepEqual(plain(row[key]),expected[c][i][key],`${key} case ${c}/${i}`)
+  }))
+})
+
+test('owner-frozen settings, editors and historical checks remain byte-identical to baseline', async (t) => {
+  const {execFileSync}=await import('node:child_process')
+  // Development-history guard: skipped in published copies that do not carry the baseline commits.
+  try { execFileSync('git',['cat-file','-e','f0417de^{commit}'],{stdio:'ignore'}); execFileSync('git',['cat-file','-e','17759b9^{commit}'],{stdio:'ignore'}) } catch { t.skip('baseline commits not in this checkout'); return }
+  // f0417de = 17759b9 + owner-approved settings label/hint text only (same maths).
+  const baseline=execFileSync('git',['show','f0417de:desktop/plugin.js'],{encoding:'utf8'})
+  for(const [start,end] of [['export const DEFAULT_ORDER_SETTINGS','const dateOrdinal ='],["      // Owner 'align this'",'function defaultHorizon('],['      const check =','      const total =']])
+    assert.equal(source.slice(source.indexOf(start),source.indexOf(end,source.indexOf(start))),baseline.slice(baseline.indexOf(start),baseline.indexOf(end,baseline.indexOf(start))))
+  const engine=fs.readFileSync(new URL('../engine.py',import.meta.url),'utf8')
+  const oldEngine=execFileSync('git',['show','17759b9:engine.py'],{encoding:'utf8'})
+  assert.equal(engine.slice(engine.indexOf('def backtest'),engine.indexOf('def inventory_history')),oldEngine.slice(oldEngine.indexOf('def backtest'),oldEngine.indexOf('def inventory_history')))
+})
+
+test('polish snapshot guard rejects any changed pure block or backend/sample bytes', async () => {
+  const {createRequire}=await import('node:module')
+  const realRequire=createRequire(import.meta.url)
+  const guardSource=fs.readFileSync(new URL('../docs/capture-polish.cjs',import.meta.url),'utf8')
+  const block=guardSource.slice(guardSource.indexOf('function logicGuard()'),guardSource.indexOf('\nconst labelIndex'))
+  for (const changed of [null,'desktop/plugin.js','engine.py','sources.py','tools.py','data/sample.json']) {
+    const scope=vm.createContext({assert,Buffer,require:realRequire,fs:{readFileSync:(file,encoding)=>{
+      const value=fs.readFileSync(file,encoding)
+      if(file!==changed) return value
+      if(file==='desktop/plugin.js') return value.replace('const SAMPLE =','const SAMPLE = /* mutation */')
+      return encoding ? value+'\nmutation' : Buffer.concat([value,Buffer.from('\nmutation')])
+    }}})
+    vm.runInContext(block+'\nglobalThis.runGuard=logicGuard',scope)
+    if (changed) assert.throws(()=>scope.runGuard(),/changed from seasonal snapshot/)
+    else assert.equal(scope.runGuard().byteIdentical,true)
+  }
+})
+
+test('seasonal and short-history chart copy accurately describes the selected method', () => {
+  const long=sampleResults()[0]
+  const short=calculate([{...plain(SAMPLE.items[0]),monthly_sales:[10,20,30]}],plain(SAMPLE.months.slice(-3)),SAMPLE.as_of,6)[0]
+  const seasonal=textValues(nodes(renderComponent('Chart',{item:long,months:SAMPLE.months}))).join(' ')
+  assert.match(seasonal,/Forecast follows last year's seasonal pattern, scaled to the last 3 months/)
+  assert.match(seasonal,/0.5–2 times average/)
+  const flat=textValues(nodes(renderComponent('Chart',{item:short,months:SAMPLE.months.slice(-3)}))).join(' ')
+  assert.match(flat,/Needs 12 months of sales for seasonal ups and downs/)
+  assert.doesNotMatch(flat,/Forecast follows last year's|Seasonal factors/)
 })

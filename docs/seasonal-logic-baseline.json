@@ -1,0 +1,17 @@
+{
+  "lifecycle": "review",
+  "packet": "owner packet 2026-11-11: seasonal forecast",
+  "scope": "Owner narrowed: seasonal demand only; backtests and settings unchanged. Exact-byte baseline is pinned to the independently tested source commit below.",
+  "source_commit": "3a665a05fe33d4639fc879ce5c4e71f6dddc378c",
+  "pureBlock": {
+    "start": "const SAMPLE =",
+    "end": "const pageStyle =",
+    "sha256": "26d04f7f130f7b90d5eb0824defd1103d1e8273423eb34fb2549569e2411908c"
+  },
+  "files": {
+    "engine.py": "786edc973c66f5630e2b31674470562c111acbe9feea9a2330d0d0ae68d5d814",
+    "sources.py": "d7545008af1d29edc3993891a78c7eef14e12fe4f9ae0b797e26da3c2fa40728",
+    "tools.py": "4ad58e9a36face6c36cad068d25d0883610d62d4fcaf8622ce15495aa3ff9af3",
+    "data/sample.json": "29f3f746ad58e269710e6f227ed4f050d258a31c825553d44338416b1aa835a3"
+  }
+}

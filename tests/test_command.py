@@ -31,8 +31,8 @@ def test_stock_command_sample_sorted_by_runout():
     lines = out.splitlines()
     assert lines[0].startswith("Stock runway (stock as of 2026-10-31")
     assert lines[1] == "• UL-FOAM-GRN: runs out Nov 2026; Usable for planning"
-    assert lines[2] == "• SEAL-WHT-300: runs out Dec 2026; Too far off to plan on"
-    assert lines[-2] == "• SEAL-CLR-300: runs out Apr 2027; Usable for planning"
+    assert lines[2] == "• SEAL-WHT-300: runs out Nov 2026; Too far off to plan on"
+    assert "• SEAL-CLR-300: runs out Apr 2027; Usable for planning" in lines
     assert lines[-1] == "No receipts recorded; assumes nothing is on order."
 
 

@@ -38,6 +38,29 @@ const heldItem = (item, reason = "Couldn't calculate: check this item's data.") 
   category: typeof item?.category === 'string' ? item.category : '', held: true, reason,
 })
 
+const SEASONAL_REASON = 'Needs 12 months of sales for seasonal ups and downs'
+const SEASONAL_COPY = "Forecast follows last year's seasonal pattern, scaled to the last 3 months"
+export function demandModel(sales, lastMonth) {
+  const seasonal = sales.length >= 12, factors = Array(12).fill(1)
+  const last = Number(lastMonth.slice(5,7))
+  if (seasonal) {
+    const base = sum(sales.slice(-12)) / 12
+    sales.slice(-12).forEach((v,i)=>{ factors[(last+i)%12] = base ? Math.max(0.5,Math.min(2,v/base)) : 1 })
+  }
+  const level = sum(sales.slice(-3).map((v,i)=>v/factors[(last+9+i)%12])) / 3
+  return {seasonal,factors,level}
+}
+const monthDemand = (model,month) => {
+  let value = model.level * model.factors[Number(month.slice(5,7))-1]
+  const nearest = Math.round(value)
+  // Match Python's four-ULP correction at integer boundaries only.
+  const ulp = value ? 2 ** (Math.floor(Math.log2(value)) - 52) : Number.MIN_VALUE
+  if (model.seasonal && model.factors[Number(month.slice(5,7))-1] !== 1 && nearest > 0 && Math.abs(value-nearest) <= 4*ulp) value=nearest
+  return Math.max(0,Math.ceil(value))
+}
+const demandAt = (item,month) => item.seasonal && item.monthly_sales?.length >= 12
+  ? monthDemand(demandModel(item.monthly_sales,item.as_of.slice(0,7)),month) : item.monthly_demand
+
 export function calculate(items, months, asOf, horizon) {
   if (!Number.isInteger(horizon) || horizon < 1 || horizon > 12) {
     throw Error('Horizon must be a whole number from 1 to 12.')
@@ -66,10 +89,12 @@ export function calculate(items, months, asOf, horizon) {
         return held('Receipts must be an object of non-negative quantities no greater than 1000000000000.')
       }
       const stock = Math.floor(item.on_hand)
-      const demand = Math.ceil(sum(sales.slice(-3)) / 3)
+      const model = demandModel(sales,months.at(-1))
+      const nextDemand = monthDemand(model,monthAfter(months.at(-1),1))
       let balance = stock, runout = null, runoutDay = null
       const projection = Array.from({ length: horizon }, (_, i) => {
         const month = monthAfter(asOf.slice(0, 7), i + 1)
+        const demand = monthDemand(model,month)
         const receipt = receipts[month] ?? 0
         const opening = balance
         balance = bounded(balance - demand + receipt)
@@ -98,7 +123,8 @@ export function calculate(items, months, asOf, horizon) {
       // Exercise history/stat arithmetic here so one unsafe item cannot crash rendering.
       historyStats(months, sales)
       inventoryHistory(item, months)
-      return { ...item, receipts, stock, monthly_demand: demand, runout_month: runout,
+      return { ...item, as_of: asOf, receipts, stock, monthly_demand: nextDemand, seasonal: model.seasonal,
+        forecast_explanation: model.seasonal ? SEASONAL_COPY : SEASONAL_REASON, runout_month: runout,
         runout_day: runoutDay?.toISOString().slice(0, 10) ?? null, order_by: orderBy,
         projection, check, error_percent: error, grade, held: false }
     } catch { return heldItem(item) }
@@ -454,14 +480,21 @@ const roundedOrderQuantity = (forecast, onHand, receipts, override) => {
 // A full calendar month consumes one monthly forecast. A partial month consumes
 // elapsed days / days in that month, from the snapshot month-end (exclusive).
 // Rationals keep the final minimum/pack ceiling exact, even at source-cell limits.
-const calendarDemand = (demand, asOf, endpoint) => {
+const calendarDemand = (item, asOf, endpoint) => {
   if (endpoint <= dateOrdinal(asOf)) return [0n, 1n]
-  const end = new Date(endpoint * 86400000)
-  const [year, month] = asOf.slice(0, 7).split('-').map(Number)
-  const whole = end.getUTCFullYear() * 12 + end.getUTCMonth() - (year * 12 + month)
-  const days = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate()
-  const [n, d] = decimalRatio(demand)
-  return [n * BigInt(whole * days + end.getUTCDate()), d * BigInt(days)]
+  let month = monthAfter(asOf.slice(0,7),1), whole=0
+  const endMonth=ordinalDate(endpoint)?.slice(0,7)
+  if (!endMonth) throw Error('Unsupported calendar')
+  while (month <= endMonth) {
+    const [y,m]=month.split('-').map(Number), days=new Date(Date.UTC(y,m,0)).getUTCDate()
+    const elapsed=month===endMonth ? new Date(endpoint*86400000).getUTCDate() : days
+    if (month===endMonth) {
+      const [n,d]=decimalRatio(demandAt(item,month)), [wn,wd]=decimalRatio(whole)
+      return [wn*d*BigInt(days)+n*BigInt(elapsed)*wd,wd*d*BigInt(days)]
+    }
+    whole=bounded(whole+demandAt(item,month))
+    month=monthAfter(month,1)
+  }
 }
 const ratioValue = ([n, d]) => Number(n) / Number(d)
 
@@ -469,14 +502,13 @@ const ratioValue = ([n, d]) => Number(n) / Number(d)
 // before consuming calendar demand. Retain the first zero day after recovery.
 // After the last receipt, jump to the crossing month beyond the displayed horizon.
 const guidanceCalendar = (item, asOf, todayOrdinal) => {
-  const demand = item.monthly_demand
   let balance = Math.floor(item.on_hand), runout = null
   const [year, month] = asOf.slice(0, 7).split('-').map(Number)
   let index = year * 12 + month
   const lastIndex = 9999 * 12 + 11
   const events = Object.keys(item.receipts || {}).filter(m => m > asOf.slice(0, 7))
   const lastReceipt = events.length ? Math.max(...events.map(m => { const [y, n] = m.split('-').map(Number); return y * 12 + n - 1 })) : index - 1
-  const crossingDate = (i, opening) => {
+  const crossingDate = (i, opening, demand) => {
     const y = Math.floor(i / 12), m = i % 12
     const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate()
     const [n, d] = decimalRatio(Math.max(0, opening)), [dn, dd] = decimalRatio(demand)
@@ -484,19 +516,25 @@ const guidanceCalendar = (item, asOf, todayOrdinal) => {
     const elapsed = demand ? Number((numerator + denominator - 1n) / denominator) : 0
     return new Date(Date.UTC(y, m, Math.max(1, Math.min(days, elapsed)))).toISOString().slice(0, 10)
   }
-  while (index <= lastReceipt && index <= lastIndex) {
-    const m = `${Math.floor(index / 12)}-${String(index % 12 + 1).padStart(2, '0')}`
-    const receipt = item.receipts[m] || 0
-    if (!runout && demand > 0 && balance - demand + receipt <= 0) runout = crossingDate(index, balance + receipt)
-    balance = bounded(balance - demand + receipt)
+  const monthKey = i => `${Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`
+  const annual = sum(Array.from({length:12},(_,i)=>demandAt(item,`${2000+Math.floor(i/12)}-${String(i%12+1).padStart(2,'0')}`)))
+  while (index <= lastIndex) {
+    // After all receipt events, skip complete seasonal years while preserving first crossing.
+    if (index > lastReceipt) {
+      if (annual === 0) break
+      const years = Math.max(0,Math.ceil(balance/annual)-1)
+      if (years > 0) {
+        index += years*12
+        if (!Number.isSafeInteger(index) || index > lastIndex) return {invalid:true}
+        balance=bounded(balance-years*annual)
+      }
+    }
+    const m=monthKey(index), demand=demandAt(item,m), receipt=item.receipts[m] || 0
+    if (demand > 0 && balance-demand+receipt <= 0) { runout=crossingDate(index,balance+receipt,demand); break }
+    balance=bounded(balance-demand+receipt)
     index++
   }
-  if (!runout && demand > 0) {
-    const steps = Math.max(1, Math.ceil(balance / demand))
-    const crossingIndex = index + steps - 1
-    if (!Number.isSafeInteger(crossingIndex) || crossingIndex > lastIndex) return { invalid: true }
-    runout = crossingDate(crossingIndex, balance - (steps - 1) * demand)
-  }
+  if (!runout && annual > 0 && index > lastIndex) return {invalid:true}
   // Today and quantity use the same start-of-month receipt event as run-out.
   // A later delivery can restore today's balance without erasing the first gap.
   let available = Math.floor(item.on_hand), delivery = null, deliveryQuantity = null
@@ -508,7 +546,7 @@ const guidanceCalendar = (item, asOf, todayOrdinal) => {
       deliveryQuantity = amount
     }
   }
-  const todayBalance = subtractRatio(decimalRatio(available), calendarDemand(demand, asOf, todayOrdinal))
+  const todayBalance = subtractRatio(decimalRatio(available), calendarDemand(item, asOf, todayOrdinal))
   const outOfStock = todayBalance[0] <= 0n
   const gap = delivery || outOfStock ? runout || ordinalDate(todayOrdinal) : null
   return { runout, gap, delivery, deliveryQuantity, outOfStock, balanceToday: ratioValue(todayBalance) }
@@ -520,7 +558,7 @@ export function orderGuidance(item, today, rawSettings = DEFAULT_ORDER_SETTINGS,
   const demand = item?.monthly_demand
   if (todayOrdinal === null || snapshot === null || monthEndOrdinal(asOf?.slice(0, 7)) !== snapshot
       || item?.held || !safeSettingNumber(item?.on_hand, 0, MAX_QUANTITY)
-      || !safeSettingNumber(demand, 0, MAX_QUANTITY)) return { status: 'needs-data', reason: item?.reason || 'Needs a valid stock date, stock and forecast.' }
+      || !safeSettingNumber(demand, 0, 4 * MAX_QUANTITY)) return { status: 'needs-data', reason: item?.reason || 'Needs a valid stock date, stock and forecast.' }
   const override = settings.product_overrides[item.sku] || {}
   // Invalid persisted pack values must not silently become whole-unit orders.
   const rawOverride = rawSettings?.product_overrides?.[item.sku] || {}
@@ -553,7 +591,7 @@ export function orderGuidance(item, today, rawSettings = DEFAULT_ORDER_SETTINGS,
     if (receiptDate > snapshot && receiptDate <= end) { incoming += amount; includedReceipts.push(amount) }
   }
   if (!Number.isFinite(incoming) || incoming > 1e18) return { status: 'needs-data', reason: 'Confirmed delivery total is outside the supported range.' }
-  const quantity = roundedOrderQuantity(calendarDemand(demand, asOf, end), item.on_hand, includedReceipts, override)
+  const quantity = roundedOrderQuantity(calendarDemand(item, asOf, end), item.on_hand, includedReceipts, override)
   if (quantity === null) return { status: 'needs-data', reason: 'The rounded quantity exceeds safe decimal precision (maximum 9007199254740991 units).' }
   const outOfStock = calendar.outOfStock
   const status = quantity > 0 ? 'order' : calendar.gap || outOfStock ? 'supply-gap'
@@ -752,6 +790,7 @@ function Chart({ item, months }) {
       ] }, name)),
       jsx('span', { children: 'Dots show stock at month end.' }),
       jsx('span', { style: { flexBasis: '100%' }, children: 'Left of Now: what happened. Right: forecast.' }),
+      jsx('span', { style: { flexBasis: '100%' }, children: `${item.forecast_explanation || SEASONAL_REASON}.${item.seasonal ? ' Seasonal factors are limited to 0.5–2 times average demand because one year is noisy.' : ''}` }),
       roundedStart && jsx('span', { style: { flexBasis: '100%' }, children: `History ends at exact stock (${format(item.on_hand)} ${item.unit}). Forecast starts from rounded-down stock (${format(item.stock)} ${item.unit}) at Now.` }),
     ] }),
     history.warning && jsx('p', { style: { ...muted, fontSize: 12 }, children: history.warning }),
@@ -1168,7 +1207,7 @@ export function Page({ ctx }) {
           ] }),
           jsxs('details', { style: sec, children: [
             jsx('summary', { style: summaryHit, children: 'How the forecast works' }),
-            jsx('p', { style: muted, children: `Demand uses the last 3 months of sales.${active.projection.some(row => row.stock < 0) ? ' Shortfalls in the table are cumulative unmet demand, not negative physical stock.' : ''} Month labels show month-end balances. Order quantities use the same calendar-month forecast, independently of the chart horizon. Cover months set the endpoint using 30 days each, rounded up.` }),
+            jsx('p', { style: muted, children: `${active.forecast_explanation}. ${active.seasonal ? 'Monthly seasonal factors are limited to 0.5–2 times average demand because one year is noisy.' : 'Forecast uses the last 3 months average, rounded up.'}${active.projection.some(row => row.stock < 0) ? ' Shortfalls in the table are cumulative unmet demand, not negative physical stock.' : ''} Month labels show month-end balances. Order quantities use the same calendar-month forecast, independently of the chart horizon. Cover months set the endpoint using 30 days each, rounded up.` }),
             jsx('p', { style: muted, children: active.supplier_days == null
               ? `No product delivery time was supplied. The order estimate ${activeGuidance.used_default_lead ? `uses the ${activeGuidance.lead_days}-day Advanced default` : 'needs a delivery-time default in Advanced settings'}.`
               : `Supplier delivery time: ${active.supplier_days} days.` }),

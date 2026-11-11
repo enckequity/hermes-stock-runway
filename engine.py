@@ -80,6 +80,32 @@ def validate_item(item: dict) -> str | None:
     return None
 
 
+SEASONAL_REASON = "Needs 12 months of sales for seasonal ups and downs"
+SEASONAL_COPY = "Forecast follows last year's seasonal pattern, scaled to the last 3 months"
+
+
+def demand_model(sales, last_month):
+    """Repeat the last year's calendar pattern, with noisy factors clamped."""
+    factors = [1.0] * 12
+    seasonal = len(sales) >= 12
+    if seasonal:
+        base = sum(sales[-12:]) / 12
+        for i, value in enumerate(sales[-12:]):
+            factors[(int(last_month[5:7]) + i) % 12] = max(0.5, min(2.0, value / base)) if base else 1.0
+    level = sum(sales[i] / factors[(int(last_month[5:7]) + i - len(sales)) % 12]
+                for i in range(len(sales) - 3, len(sales))) / 3
+    return {"seasonal": seasonal, "factors": factors, "level": level}
+
+
+def month_demand(model, month):
+    value = model["level"] * model["factors"][int(month[5:7]) - 1]
+    # Suppress only floating-point roundoff around an exact integer ceiling.
+    nearest = round(value)
+    if model["seasonal"] and model["factors"][int(month[5:7]) - 1] != 1 and nearest > 0 and abs(value - nearest) <= 4 * math.ulp(value):
+        value = nearest
+    return max(0, math.ceil(value))
+
+
 def backtest(sales: list[float]) -> dict:
     if any(not quantity(v) for v in sales):
         raise ValueError("Sales quantities exceed the supported range.")
@@ -147,8 +173,8 @@ def _forecast(item, months, as_of, horizon):
     if len(item["monthly_sales"]) < 3:
         return {"sku": item["sku"], "name": item["name"], "held": True, "reason": "At least 3 full months of sales are needed to forecast."}
     stock = math.floor(item["on_hand"])
-    monthly_mean = bounded(sum(item["monthly_sales"][-3:])) / 3
-    demand = math.ceil(monthly_mean)
+    model = demand_model(item["monthly_sales"], months[-1])
+    next_demand = month_demand(model, month_after(months[-1], 1))
     projected = []
     runout = None
     balance = stock
@@ -160,6 +186,7 @@ def _forecast(item, months, as_of, horizon):
     runout_day = None
     for offset in range(1, horizon + 1):
         month = month_after(as_of[:7], offset)
+        demand = month_demand(model, month)
         receipt = receipts.get(month, 0)
         if isinstance(receipt, bool) or not isinstance(receipt, (int, float)) or not math.isfinite(receipt) or receipt < 0:
             return {"sku": item["sku"], "name": item["name"], "held": True, "reason": f"Receipt for {month} must be a non-negative number."}
@@ -178,7 +205,9 @@ def _forecast(item, months, as_of, horizon):
         order_by = date.fromordinal(runout_day.toordinal() - math.ceil(supplier_days)).isoformat()
     check = backtest(item["monthly_sales"])
     return {"sku": item["sku"], "name": item["name"], "unit": item["unit"], "stock": stock,
-            "monthly_demand": demand, "runout_month": runout, "runout_day": runout_day.isoformat() if runout_day else None, "order_by": order_by,
+            "monthly_demand": next_demand, "seasonal": model["seasonal"],
+            "forecast_explanation": SEASONAL_COPY if model["seasonal"] else SEASONAL_REASON,
+            "runout_month": runout, "runout_day": runout_day.isoformat() if runout_day else None, "order_by": order_by,
             "order_overdue": order_by is not None and date.fromisoformat(order_by) < latest,
             "error_percent": check["error_percent"], "grade": check["grade"], "projection": projected,
             "receipts": receipts, "held": False}

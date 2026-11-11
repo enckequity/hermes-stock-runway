@@ -6,24 +6,28 @@ const { pathToFileURL } = require('node:url')
 const assert = require('node:assert/strict')
 
 function logicGuard() {
-  const baseline = require('node:child_process').execFileSync('git', ['show', '3205e8b1c9163b6cb3be34154926aff174cc5e86:desktop/plugin.js'], { encoding: 'utf8' })
+  // Intentional seasonal computation rebaseline authorized by stock-runway-seasonal-forecast-20261111.md,
+  // narrowed by owner to seasonal-only math. Exact-byte snapshot permits precommit verification;
+  // parent reviews these hashes and pins the tested source commit after committing.
+  const manifest = JSON.parse(fs.readFileSync('docs/seasonal-logic-baseline.json', 'utf8'))
+  const sha256 = bytes => require('node:crypto').createHash('sha256').update(bytes).digest('hex')
   const current = fs.readFileSync('desktop/plugin.js', 'utf8')
-  const start = source => source.indexOf('const SAMPLE =')
-  const end = source => source.indexOf('const pageStyle =')
-  const basePure = baseline.slice(start(baseline), end(baseline))
-  const currentPure = current.slice(start(current), end(current))
-  assert.equal(currentPure, basePure, 'calculation/guidance block changed from base')
-  for (const file of ['engine.py', 'sources.py', 'tools.py', 'data/sample.json']) {
-    require('node:child_process').execFileSync('git', ['diff', '--quiet', '3205e8b1c9163b6cb3be34154926aff174cc5e86', '--', file])
-  }
-  return { basePureBytes: Buffer.byteLength(basePure), currentPureBytes: Buffer.byteLength(currentPure), byteIdentical: true,
-    backendDataFilesUnchanged: ['engine.py', 'sources.py', 'tools.py', 'data/sample.json'] }
+  const start = current.indexOf('const SAMPLE ='), end = current.indexOf('const pageStyle =')
+  assert.ok(start >= 0 && end > start, 'pure block boundaries must exist')
+  const pure = current.slice(start, end)
+  assert.equal(sha256(pure), manifest.pureBlock.sha256, 'calculation/guidance block changed from seasonal snapshot')
+  const protectedFiles = ['engine.py', 'sources.py', 'tools.py', 'data/sample.json']
+  assert.deepEqual(Object.keys(manifest.files).sort(), [...protectedFiles].sort(), 'all backend/sample protections required')
+  for (const file of protectedFiles) assert.equal(sha256(fs.readFileSync(file)), manifest.files[file], `${file} changed from seasonal snapshot`)
+  return { packet: manifest.packet, snapshot: 'docs/seasonal-logic-baseline.json',
+    currentPureBytes: Buffer.byteLength(pure), byteIdentical: true, backendDataFilesUnchanged: protectedFiles }
 }
 
 const labelIndex = process.argv.indexOf('--label')
 const label = labelIndex >= 0 ? process.argv[labelIndex + 1] : null
 assert.equal(label, 'after', 'Baseline is immutable. Usage: node docs/capture-polish.cjs --label after')
 const logic = logicGuard()
+if (process.argv.includes('--guard-only')) { console.log(JSON.stringify(logic)); process.exit(0) }
 if (!process.env.PLAYWRIGHT_MODULE) throw Error('Set PLAYWRIGHT_MODULE to an existing local module; no installs.')
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE)
 const outDir = `.scratch/polish-${label}`

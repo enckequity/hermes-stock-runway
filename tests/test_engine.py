@@ -1,4 +1,6 @@
 from pathlib import Path
+from fractions import Fraction
+import math
 import sys
 import types
 
@@ -16,17 +18,22 @@ from stock_runway.sources import load_sample
 def test_sample_oracle_independently_recomputed():
     data = load_sample(Path(__file__).parents[1] / "data" / "sample.json")
     expected = {
-        "SEAL-CLR-300": (25860, 4911, "2027-04", 9),
-        "UL-FOAM-GRN": (8269, 12571, "2026-11", 15),
-        "GRT-GRY-5": (1863, 600, "2027-02", 13),
-        "TRM-ALU-25": (1125, 229, "2027-03", 21),
-        "SEAL-WHT-300": (548, 391, "2026-12", 75),
+        "SEAL-CLR-300": (25860, 5689, "2027-04", 9),
+        "UL-FOAM-GRN": (8269, 14153, "2026-11", 15),
+        "GRT-GRY-5": (1863, 295, "2027-04", 13),
+        "TRM-ALU-25": (1125, 153, "2027-05", 21),
+        "SEAL-WHT-300": (548, 633, "2026-11", 75),
     }
     for item in data["items"]:
         row = item["monthly_sales"]
         month = "2026-10"
         stock = int(item["on_hand"])
-        demand = -(-sum(row[-3:]) // 3)
+        # Independent rational oracle, factors in history order (Nov..Oct).
+        base = Fraction(sum(row), 12)
+        factors = [max(Fraction(1, 2), min(2, Fraction(v) / base)) for v in row]
+        level = sum(Fraction(row[i]) / factors[i] for i in range(9, 12)) / 3
+        demands = [math.ceil(level * f) for f in factors]
+        demand = demands[0]
         balance = stock
         runout = None
         for offset in range(1, 13):
@@ -34,7 +41,7 @@ def test_sample_oracle_independently_recomputed():
             mon += offset
             year += (mon - 1) // 12
             mon = (mon - 1) % 12 + 1
-            balance -= demand
+            balance -= demands[offset - 1]
             if balance <= 0 and runout is None:
                 runout = f"{year:04d}-{mon:02d}"
         forecasted = [sum(row[i - 3:i]) / 3 for i in range(len(row) - 4, len(row))]
@@ -110,3 +117,52 @@ def test_source_unit_conversion_hold_reason_prevents_forecasting():
     assert forecast(item, data["months"], data["as_of"]) == {
         "sku": item["sku"], "name": item["name"], "held": True, "reason": reason,
     }
+
+# Seasonal-only packet, narrowed by owner: historical backtest is unchanged.
+@pytest.mark.parametrize('sales,seasonal,first,second,level', [
+    ([50, 150] + [100] * 10, True, 50, 150, 100),
+    ([0, 1000] + [10] * 10, True, 10, 40, 20),
+    ([0] * 12, True, 0, 0, 0),
+    ([0.1] * 12, True, 1, 1, 0.1),
+    ([10] * 11, False, 10, 10, 10),
+    ([1.0000000000000002] * 3, False, 2, 2, 1.0000000000000002),
+])
+def test_seasonal_factors_clamp_zero_fraction_fallback(sales, seasonal, first, second, level):
+    from stock_runway.engine import demand_model, month_demand
+    model = demand_model(sales, '2026-12')
+    assert model['seasonal'] is seasonal
+    assert model['level'] == pytest.approx(level)
+    assert all(0.5 <= f <= 2 for f in model['factors'])
+    assert month_demand(model, '2027-01') == first
+    assert month_demand(model, '2027-02') == second
+    if sales == [50, 150] + [100] * 10:
+        assert model['factors'] == [0.5, 1.5] + [1] * 10
+    if not any(sales):
+        assert model['factors'] == [1] * 12
+
+
+@pytest.mark.parametrize('sales,stock,runout', [
+    ([150, 50] + [100] * 10, 75, '2027-01-16'),
+    ([50, 150] + [100] * 10, 75, '2027-02-05'),
+])
+def test_seasonal_runout_interpolates_using_crossing_month(sales, stock, runout):
+    from stock_runway.engine import month_after
+    months = [month_after('2026-01', i) for i in range(12)]
+    item = dict(sku='SYN', name='Synthetic', unit='m', on_hand=stock, supplier_days=0,
+                monthly_sales=sales, receipts={})
+    result = forecast(item, months, '2026-12-31', 6)
+    assert result['seasonal'] is True
+    assert result['runout_day'] == runout
+    assert result['monthly_demand'] == sales[0]
+
+
+def test_seasonal_sample_oracle_and_fallback_explanation():
+    data = load_sample()
+    result = forecast(data['items'][0], data['months'], data['as_of'])
+    assert [r['demand'] for r in result['projection']] == [5689, 4789, 5282, 5523, 4504, 3962]
+    assert result['runout_day'] == '2027-04-01'
+    item = {**data['items'][0], 'monthly_sales': [10, 20, 30]}
+    short = forecast(item, data['months'][-3:], data['as_of'])
+    assert short['seasonal'] is False
+    assert short['forecast_explanation'] == 'Needs 12 months of sales for seasonal ups and downs'
+    assert [r['demand'] for r in short['projection']] == [20] * 6
