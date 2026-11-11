@@ -6,11 +6,11 @@
   "pureBlock": {
     "start": "const SAMPLE =",
     "end": "const pageStyle =",
-    "sha256": "1c1e60fdf9e26f46f17f3c18fc95d9f3912f31cb31a4340b3664b3182dd374ac"
+    "sha256": "e8be2344bbe42b7aa5617e12ea2a4202eb7610915e7fb81ecb68ab578934d48f"
   },
   "files": {
     "engine.py": "786edc973c66f5630e2b31674470562c111acbe9feea9a2330d0d0ae68d5d814",
-    "sources.py": "d4c5e52c319dceca4b1f310e9fa7de8be1e089760c341e8a3c8fdcc251a92abb",
+    "sources.py": "fee7d13806e205cde358287c0852ed506da97fe3c834437e4ed044fe2c53e2fe",
     "tools.py": "4ad58e9a36face6c36cad068d25d0883610d62d4fcaf8622ce15495aa3ff9af3",
     "data/sample.json": "29f3f746ad58e269710e6f227ed4f050d258a31c825553d44338416b1aa835a3"
   }

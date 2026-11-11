@@ -4,6 +4,15 @@ Lifecycle: living
 
 Stock Runway estimates how long current stock may last using recent monthly net sales. It includes an anonymized sample, accepts a local CSV, and has an optional read-only Odoo source. Forecasts are estimates, not promises or purchase orders.
 
+## Install
+
+```bash
+hermes plugins install usegreymatter/hermes-stock-runway
+hermes plugins enable stock-runway
+```
+
+Then restart Hermes Desktop and open **Stock Runway** in the sidebar (or type `/stock` in any chat). It opens on built-in sample data, so there is nothing to configure. Load your own stock with **My file (CSV)** — exports from SAP Business One, SAP S/4HANA, NetSuite, Zoho Inventory, QuickBooks, Dynamics 365, Odoo, Sage and similar work without renaming columns.
+
 ## Chat tool
 
 The single `stock_runway` tool works in CLI, Telegram, Desktop, and other Hermes chat surfaces.
@@ -20,7 +29,7 @@ The horizon is 1–12 whole months (integral JSON numbers such as `6.0` are acce
 
 ### Works with your ERP's export
 
-You don't need to rename columns. Export your stock list with monthly sales from your ERP and load it as is — Stock Runway recognises the usual column names from **SAP Business One, NetSuite, Zoho Inventory, QuickBooks, Microsoft Dynamics 365 and Odoo**, in any order:
+You don't need to rename columns. Export your stock list with monthly sales from your ERP and load it as is — Stock Runway recognises the usual column names from **SAP Business One, SAP S/4HANA, NetSuite, Zoho Inventory, QuickBooks, Microsoft Dynamics 365, Odoo and Sage**, in any order:
 
 | Stock Runway needs | Also accepted (examples) |
 |---|---|

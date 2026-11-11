@@ -26,23 +26,14 @@ MONTH_RE = re.compile(r"^[1-9]\d{3}-(0[1-9]|1[0-2])$")
 # Microsoft Dynamics and Odoo exports, mapped to Stock Runway's canonical columns.
 # Mirrored exactly in desktop/plugin.js (ERP_ALIASES / normalizeErpRows).
 ERP_ALIASES = {
-    "sku": ["sku", "item code", "itemcode", "item no", "item number", "item id", "product code",
-            "product id", "internal reference", "default code", "part number", "part no",
-            "article", "article number", "material", "no"],
-    "name": ["item name", "itemname", "product name", "display name", "item description",
-             "material description", "product service", "description", "product", "name", "item"],
-    "unit": ["unit", "uom", "unit of measure", "units", "stock uom", "inventory uom",
-             "base unit", "base unit of measure", "inventory unit", "usage unit", "invntryuom"],
-    "on_hand": ["on hand", "qty on hand", "quantity on hand", "in stock", "stock on hand",
-                "onhand", "qty in stock", "quantity in stock", "available", "qty available",
-                "quantity available", "available quantity", "current stock", "stock",
-                "inventory", "free stock"],
-    "supplier_days": ["supplier days", "lead time", "lead time days", "lead days",
-                      "purchase lead time", "vendor lead time", "supplier lead time",
-                      "delivery lead time", "delivery days", "lead time in days"],
-    "category": ["category", "item group", "item category", "product category", "group",
-                 "class", "family", "category name", "itmsgrpnam"],
+    "sku": ["sku", "item code", "itemcode", "item no", "item number", "item id", "product code", "product id", "internal reference", "default code", "part number", "part no", "article", "article number", "material", "no", "stock code", "item ref", "product internal reference", "product sku", "material number", "item sku", "variant sku", "barcode"],
+    "name": ["item name", "itemname", "product name", "display name", "item description", "material description", "product service", "description", "product", "name", "item", "product product", "material desc", "item desc", "product description", "title", "product title", "stock description"],
+    "unit": ["unit", "uom", "unit of measure", "units", "stock uom", "inventory uom", "base unit", "base unit of measure", "inventory unit", "usage unit", "invntryuom", "uom name", "unit name", "product unit of measure", "stocking unit", "sales unit"],
+    "on_hand": ["on hand", "qty on hand", "quantity on hand", "in stock", "stock on hand", "onhand", "qty in stock", "quantity in stock", "available", "qty available", "quantity available", "available quantity", "current stock", "stock", "inventory", "free stock", "on hand quantity", "qty", "quantity", "unrestricted", "unrestricted stock", "total stock", "physical stock", "closing stock", "balance", "qty in hand", "stock quantity", "inventory quantity", "available stock", "stock level", "quantity available for sale"],
+    "supplier_days": ["supplier days", "lead time", "lead time days", "lead days", "purchase lead time", "vendor lead time", "supplier lead time", "delivery lead time", "delivery days", "lead time in days", "procurement lead time", "replenishment lead time", "purchasing lead time", "delivery time", "planned delivery time", "planned delivery time days", "vendor lead time days"],
+    "category": ["category", "item group", "item category", "product category", "group", "class", "family", "category name", "itmsgrpnam", "product category name", "product type", "department", "item type", "item class", "sub category", "stock category"],
 }
+
 _ALIAS_LOOKUP = {}
 for _canon, _names in ERP_ALIASES.items():
     for _rank, _n in enumerate(_names):
