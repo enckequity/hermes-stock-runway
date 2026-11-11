@@ -18,6 +18,23 @@ The horizon is 1–12 whole months (integral JSON numbers such as `6.0` are acce
 
 ## Local CSV
 
+### Works with your ERP's export
+
+You don't need to rename columns. Export your stock list with monthly sales from your ERP and load it as is — Stock Runway recognises the usual column names from **SAP Business One, NetSuite, Zoho Inventory, QuickBooks, Microsoft Dynamics 365 and Odoo**, in any order:
+
+| Stock Runway needs | Also accepted (examples) |
+|---|---|
+| `sku` | Item Code, ItemCode, Item number, Product Code, Internal Reference, Part Number, SKU |
+| `name` | Item Name, Product name, Display Name, Description, Product/Service |
+| `unit` *(optional, default "units")* | UoM, Unit of Measure, Usage Unit, Inventory unit, InvntryUom |
+| `on_hand` | Qty On Hand, Quantity On Hand, Stock On Hand, OnHand, Available, In Stock |
+| `supplier_days` *(optional)* | Lead Time, Lead Time (days), Vendor Lead Time, Purchase Lead Time |
+| `category` *(optional)* | Category, Item Group, Product Category, ItmsGrpNam |
+| monthly sales | `2026-01`, `2026/01`, `01/2026`, `Jan 2026`, `January 2026`, `Jan-26` |
+
+Other columns (price, cost, internal IDs) are ignored, and numbers like `"1,200"` are read as 1200. Ready-made examples for each ERP are in [`docs/erp-examples/`](docs/erp-examples/). Files already in the format below load exactly as before.
+
+
 The optional `category` column and `rcv:YYYY-MM` historical delivery columns may follow the five required prefix columns alongside the sales columns. If any `rcv:` column is supplied, supply exactly one for **every** sales month, including explicit `0` quantities for months with no deliveries. Duplicates, invalid/out-of-range months, partial coverage, blank quantities and negative/non-finite quantities are rejected consistently in Python and the browser. No `rcv:` columns means delivery history is absent, not zero. These historical columns do not add future receipts.
 
 Pass an explicit local path with `source=csv` and `csv_path`. The first five columns must be `sku,name,unit,on_hand,supplier_days`; append at least three chronological, unique `YYYY-MM` columns containing monthly net sales. Leave `supplier_days` empty if unknown. Numeric values must be non-negative. Files are capped at 2 MiB and 10,000 item rows. An optional receipts CSV passed as `receipts_path` uses the exact columns `sku,month,quantity`; only listed confirmed receipts are added. Receipt months must be after the last sales month and no more than 12 months later. `csv_path` can read any local CSV the agent is pointed at; it is not restricted to the plugin directory. Paths are trusted local files selected by the user; this plugin does not write them. Do not pass files containing data you are not authorized to expose to Hermes.

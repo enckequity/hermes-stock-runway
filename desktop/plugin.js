@@ -133,6 +133,63 @@ export function calculate(items, months, asOf, horizon) {
 
 class CsvError extends Error {}
 
+// ERP export headers: exact mirror of sources.py ERP_ALIASES / erp_month / normalize_erp_rows.
+export const ERP_ALIASES = {"sku": ["sku", "item code", "itemcode", "item no", "item number", "item id", "product code", "product id", "internal reference", "default code", "part number", "part no", "article", "article number", "material", "no"], "name": ["item name", "itemname", "product name", "display name", "item description", "material description", "product service", "description", "product", "name", "item"], "unit": ["unit", "uom", "unit of measure", "units", "stock uom", "inventory uom", "base unit", "base unit of measure", "inventory unit", "usage unit", "invntryuom"], "on_hand": ["on hand", "qty on hand", "quantity on hand", "in stock", "stock on hand", "onhand", "qty in stock", "quantity in stock", "available", "qty available", "quantity available", "available quantity", "current stock", "stock", "inventory", "free stock"], "supplier_days": ["supplier days", "lead time", "lead time days", "lead days", "purchase lead time", "vendor lead time", "supplier lead time", "delivery lead time", "delivery days", "lead time in days"], "category": ["category", "item group", "item category", "product category", "group", "class", "family", "category name", "itmsgrpnam"]}
+const ERP_LOOKUP = (() => { const m = new Map(); for (const [canon, names] of Object.entries(ERP_ALIASES)) names.forEach((n, rank) => { if (!m.has(n)) m.set(n, [canon, rank]) }); return m })()
+const ERP_MON = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+const ERP_FULL = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december']
+const erpKey = raw => raw.trim().toLowerCase().replace(/[\s\-_./()#:]+/g, ' ').split(' ').filter(Boolean).join(' ')
+export function erpMonth(raw) {
+  const t = raw.trim()
+  let y, mo, m
+  if ((m = /^([1-9]\d{3})[-/.](\d{1,2})(?:[-/.]\d{1,2})?$/.exec(t))) { y = +m[1]; mo = +m[2] }
+  else if ((m = /^(\d{1,2})[-/.]([1-9]\d{3})$/.exec(t))) { mo = +m[1]; y = +m[2] }
+  else {
+    m = /^([A-Za-z]{3,9})[\s\-/.,']*(\d{4}|\d{2})$/.exec(t)
+    if (!m) return null
+    const name = m[1].toLowerCase(), idx = ERP_MON.indexOf(name.slice(0, 3))
+    if (idx < 0) return null
+    if (!(name === name.slice(0, 3) || ERP_FULL[idx].startsWith(name)) && name !== 'sept') return null
+    mo = idx + 1; y = +m[2] + (m[2].length === 2 ? 2000 : 0)
+  }
+  if (!(mo >= 1 && mo <= 12)) return null
+  return `${String(y).padStart(4, '0')}-${String(mo).padStart(2, '0')}`
+}
+export function normalizeErpRows(rows) {
+  if (!rows.length) return rows
+  const headers = rows[0]
+  if (['sku', 'name', 'unit', 'on_hand', 'supplier_days'].every((x, i) => headers[i] === x)) return rows
+  const picked = {}, ranks = {}, months = [], receipts = []
+  headers.forEach((raw, idx) => {
+    const key = erpKey(raw), low = raw.trim().toLowerCase()
+    const rcv = key.startsWith('rcv ') || low.startsWith('rcv:')
+    const label = low.startsWith('rcv:') ? raw.trim().slice(4) : raw
+    const month = erpMonth(label)
+    if (month && rcv) { receipts.push([`rcv:${month}`, idx]); return }
+    if (month) { months.push([month, idx]); return }
+    const hit = ERP_LOOKUP.get(key)
+    if (hit) { const [canon, rank] = hit; if (!(canon in ranks) || rank < ranks[canon]) { picked[canon] = idx; ranks[canon] = rank } }
+  })
+  if (!('sku' in picked) && 'name' in picked) {
+    const plain = headers.map((h, i) => i).filter(i => erpKey(headers[i]) === 'name' && i !== picked.name)
+    if (plain.length) picked.sku = plain[0]
+  }
+  const cmp = (a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1])
+  months.sort(cmp); receipts.sort(cmp)
+  if (!['sku', 'name', 'on_hand'].every(k => k in picked)) return rows
+  const out = [['sku', 'name', 'unit', 'on_hand', 'supplier_days', ...('category' in picked ? ['category'] : []), ...months.map(x => x[0]), ...receipts.map(x => x[0])]]
+  for (const r of rows.slice(1)) {
+    const get = i => (i !== undefined && i < r.length ? r[i] : '')
+    const line = [get(picked.sku), get(picked.name), 'unit' in picked ? get(picked.unit) : 'units', get(picked.on_hand).replaceAll(',', ''),
+      'supplier_days' in picked ? get(picked.supplier_days).replaceAll(',', '') : '']
+    if ('category' in picked) line.push(get(picked.category))
+    line.push(...months.map(x => get(x[1]).replaceAll(',', '')), ...receipts.map(x => get(x[1]).replaceAll(',', '')))
+    if (r.length !== headers.length) line.push('')
+    out.push(line)
+  }
+  return out
+}
+
 export function parseCsv(text) {
   if (new TextEncoder().encode(text).length > 2 * 1024 * 1024) throw new CsvError('CSV must be no larger than 2 MiB.')
   text = text.replace(/^\uFEFF/, '')
@@ -161,9 +218,11 @@ export function parseCsv(text) {
   }
   if (quoted) throw new CsvError('Could not read the local CSV file.')
   pushRow()
+  const erpRows = normalizeErpRows(rows)
+  if (erpRows !== rows) { rows.length = 0; for (const r of erpRows) rows.push(r) }
   const headers = rows.shift() || []
   const fixed = ['sku', 'name', 'unit', 'on_hand', 'supplier_days']
-  if (fixed.some((x, i) => headers[i] !== x)) throw new CsvError('CSV columns must begin: sku,name,unit,on_hand,supplier_days.')
+  if (fixed.some((x, i) => headers[i] !== x)) throw new CsvError('CSV columns must begin: sku,name,unit,on_hand,supplier_days. Common ERP names also work, e.g. Item Code, Item Name, UoM, Qty On Hand, Lead Time.')
   const extra = headers.slice(5)
   const months = extra.filter(h => h !== 'category' && !h.startsWith('rcv:'))
   if (months.length < 3 || months.some(m => !/^[1-9][0-9]{3}-(0[1-9]|1[0-2])$/.test(m))) {

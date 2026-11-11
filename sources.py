@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 import re
@@ -18,6 +19,121 @@ from pathlib import Path
 MAX_CSV_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 10000
 MONTH_RE = re.compile(r"^[1-9]\d{3}-(0[1-9]|1[0-2])$")
+
+
+# --- ERP export headers -----------------------------------------------------
+# Common column names from SAP Business One, NetSuite, Zoho Inventory, QuickBooks,
+# Microsoft Dynamics and Odoo exports, mapped to Stock Runway's canonical columns.
+# Mirrored exactly in desktop/plugin.js (ERP_ALIASES / normalizeErpRows).
+ERP_ALIASES = {
+    "sku": ["sku", "item code", "itemcode", "item no", "item number", "item id", "product code",
+            "product id", "internal reference", "default code", "part number", "part no",
+            "article", "article number", "material", "no"],
+    "name": ["item name", "itemname", "product name", "display name", "item description",
+             "material description", "product service", "description", "product", "name", "item"],
+    "unit": ["unit", "uom", "unit of measure", "units", "stock uom", "inventory uom",
+             "base unit", "base unit of measure", "inventory unit", "usage unit", "invntryuom"],
+    "on_hand": ["on hand", "qty on hand", "quantity on hand", "in stock", "stock on hand",
+                "onhand", "qty in stock", "quantity in stock", "available", "qty available",
+                "quantity available", "available quantity", "current stock", "stock",
+                "inventory", "free stock"],
+    "supplier_days": ["supplier days", "lead time", "lead time days", "lead days",
+                      "purchase lead time", "vendor lead time", "supplier lead time",
+                      "delivery lead time", "delivery days", "lead time in days"],
+    "category": ["category", "item group", "item category", "product category", "group",
+                 "class", "family", "category name", "itmsgrpnam"],
+}
+_ALIAS_LOOKUP = {}
+for _canon, _names in ERP_ALIASES.items():
+    for _rank, _n in enumerate(_names):
+        _ALIAS_LOOKUP.setdefault(_n, (_canon, _rank))
+_MONTHS = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+
+
+def _header_key(raw: str) -> str:
+    return " ".join(re.sub(r"[\s\-_./()#:]+", " ", raw.strip().lower()).split())
+
+
+def erp_month(raw: str):
+    """Return YYYY-MM for common ERP month labels, else None."""
+    t = raw.strip()
+    m = re.fullmatch(r"([1-9]\d{3})[-/.](\d{1,2})(?:[-/.]\d{1,2})?", t)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+    else:
+        m = re.fullmatch(r"(\d{1,2})[-/.]([1-9]\d{3})", t)
+        if m:
+            mo, y = int(m.group(1)), int(m.group(2))
+        else:
+            m = re.fullmatch(r"([A-Za-z]{3,9})[\s\-/.,']*(\d{4}|\d{2})", t)
+            if not m or m.group(1)[:3].lower() not in _MONTHS:
+                return None
+            name = m.group(1).lower()
+            full = ["january", "february", "march", "april", "may", "june", "july", "august",
+                    "september", "october", "november", "december"][_MONTHS[name[:3]] - 1]
+            if not (name == name[:3] or full.startswith(name)) and name not in ("sept",):
+                return None
+            mo = _MONTHS[name[:3]]
+            y = int(m.group(2)) + (2000 if len(m.group(2)) == 2 else 0)
+    if not 1 <= mo <= 12:
+        return None
+    return f"{y:04d}-{mo:02d}"
+
+
+def normalize_erp_rows(rows: list[list[str]]) -> list[list[str]]:
+    """Rewrite an ERP export (any column order/names) into canonical column order.
+
+    Canonical files are returned unchanged. Otherwise known columns are renamed,
+    month labels become YYYY-MM (``rcv:`` prefix kept), missing unit defaults to
+    "units", missing supplier_days is blank, and unrecognised columns are dropped.
+    """
+    if not rows:
+        return rows
+    headers = rows[0]
+    if headers[:5] == ["sku", "name", "unit", "on_hand", "supplier_days"]:
+        return rows
+    picked, ranks, months, receipts = {}, {}, [], []
+    for idx, raw in enumerate(headers):
+        key = _header_key(raw)
+        rcv = key.startswith("rcv ") or raw.strip().lower().startswith("rcv:")
+        label = raw.strip()[4:] if raw.strip().lower().startswith("rcv:") else raw
+        month = erp_month(label)
+        if month and rcv:
+            receipts.append((f"rcv:{month}", idx))
+            continue
+        if month:
+            months.append((month, idx))
+            continue
+        hit = _ALIAS_LOOKUP.get(key)
+        if hit:
+            canon, rank = hit
+            if canon not in ranks or rank < ranks[canon]:
+                picked[canon], ranks[canon] = idx, rank
+    # NetSuite: "Name" is the item code when "Display Name" holds the description.
+    if "sku" not in picked and "name" in picked:
+        plain = [i for i, h in enumerate(headers) if _header_key(h) == "name" and i != picked["name"]]
+        if plain:
+            picked["sku"] = plain[0]
+    months.sort()
+    receipts.sort()
+    if not {"sku", "name", "on_hand"} <= picked.keys():
+        return rows  # let the strict validator explain what is missing
+    order = ["sku", "name", "unit", "on_hand", "supplier_days"]
+    out_headers = order + (["category"] if "category" in picked else []) + [m for m, _ in months] + [r for r, _ in receipts]
+    out = [out_headers]
+    for r in rows[1:]:
+        get = lambda i: r[i] if i is not None and i < len(r) else ""
+        line = [get(picked["sku"]), get(picked["name"]),
+                get(picked["unit"]) if "unit" in picked else "units",
+                get(picked["on_hand"]).replace(",", ""),
+                get(picked.get("supplier_days")).replace(",", "") if "supplier_days" in picked else ""]
+        if "category" in picked:
+            line.append(get(picked["category"]))
+        line += [get(i).replace(",", "") for _, i in months] + [get(i).replace(",", "") for _, i in receipts]
+        if len(r) != len(headers):
+            line.append("")  # keep the strict column-count error
+        out.append(line)
+    return out
 
 
 class SourceError(ValueError):
@@ -58,12 +174,17 @@ def load_csv(path: str, receipts_path: str | None = None) -> dict:
         file_path = Path(path).expanduser().resolve(strict=True)
         if not file_path.is_file() or file_path.stat().st_size > MAX_CSV_BYTES:
             raise SourceError("CSV must be a local file no larger than 2 MiB.")
-        with file_path.open("r", newline="", encoding="utf-8-sig") as handle:
+        with file_path.open("r", newline="", encoding="utf-8-sig") as raw_handle:
+            raw_rows = list(csv.reader(raw_handle, strict=True))
+            buffer = io.StringIO()
+            csv.writer(buffer, lineterminator="\n").writerows(normalize_erp_rows(raw_rows))
+            buffer.seek(0)
+            handle = buffer
             reader = csv.DictReader(handle, strict=True)
             headers = reader.fieldnames or []
             fixed = ["sku", "name", "unit", "on_hand", "supplier_days"]
             if headers[:5] != fixed:
-                raise SourceError("CSV columns must begin: sku,name,unit,on_hand,supplier_days.")
+                raise SourceError("CSV columns must begin: sku,name,unit,on_hand,supplier_days. Common ERP names also work, e.g. Item Code, Item Name, UoM, Qty On Hand, Lead Time.")
             extra = headers[5:]
             months = [h for h in extra if h != "category" and not h.startswith("rcv:")]
             if len(months) < 3 or any(not MONTH_RE.fullmatch(m) for m in months):

@@ -7,7 +7,7 @@ import { expandStressFixtures } from '../docs/stress-fixtures.mjs'
 const source = fs.readFileSync(new URL('../desktop/plugin.js', import.meta.url), 'utf8')
 const pure = source.slice(source.indexOf('const SAMPLE ='), source.indexOf('const pageStyle ='))
 const context = vm.createContext({ TextEncoder, TextDecoder, atob, btoa })
-vm.runInContext(pure.replaceAll('export ', '') + '\nglobalThis.helpers = { SAMPLE, calculate, parseCsv, label, stockPath, inventoryHistory, historyStats, urgencyTone, gradeVariant, tickLabel, niceStep, stockCell, sortRows, validCard, encodeCard, decodeCard, CARD_MAX_LINE, orderGuidance: typeof orderGuidance === "function" ? orderGuidance : undefined, orderBucket: typeof orderBucket === "function" ? orderBucket : undefined, normalizeOrderSettings: typeof normalizeOrderSettings === "function" ? normalizeOrderSettings : undefined, DEFAULT_ORDER_SETTINGS: typeof DEFAULT_ORDER_SETTINGS === "undefined" ? undefined : DEFAULT_ORDER_SETTINGS }', context)
+vm.runInContext(pure.replaceAll('export ', '') + '\nglobalThis.helpers = { SAMPLE, calculate, parseCsv, erpMonth, label, stockPath, inventoryHistory, historyStats, urgencyTone, gradeVariant, tickLabel, niceStep, stockCell, sortRows, validCard, encodeCard, decodeCard, CARD_MAX_LINE, orderGuidance: typeof orderGuidance === "function" ? orderGuidance : undefined, orderBucket: typeof orderBucket === "function" ? orderBucket : undefined, normalizeOrderSettings: typeof normalizeOrderSettings === "function" ? normalizeOrderSettings : undefined, DEFAULT_ORDER_SETTINGS: typeof DEFAULT_ORDER_SETTINGS === "undefined" ? undefined : DEFAULT_ORDER_SETTINGS }', context)
 const { SAMPLE, calculate, parseCsv, label, stockPath, inventoryHistory, historyStats, urgencyTone, gradeVariant, tickLabel } = context.helpers
 const plain = value => JSON.parse(JSON.stringify(value))
 
@@ -2199,4 +2199,24 @@ test('seasonal and short-history chart copy accurately describes the selected me
   const flat=textValues(nodes(renderComponent('Chart',{item:short,months:SAMPLE.months.slice(-3)}))).join(' ')
   assert.match(flat,/Needs 12 months of sales for seasonal ups and downs/)
   assert.doesNotMatch(flat,/Forecast follows last year's|Seasonal factors/)
+})
+
+
+test('ERP export CSVs (SAP B1, NetSuite, Zoho, QuickBooks, Dynamics) parse in the browser exactly like Python', async () => {
+  const {execFileSync}=await import('node:child_process')
+  const dir=new URL('../docs/erp-examples/',import.meta.url)
+  const files=fs.readdirSync(dir).filter(f=>f.endsWith('.csv')).sort()
+  assert.ok(files.length>=5)
+  const canon=parseCsv('sku,name,unit,on_hand,supplier_days,2026-01,2026-02,2026-03\nA-1,Widget,pcs,1200,30,100,110,120\n')
+  for (const f of files) {
+    const js=parseCsv(fs.readFileSync(new URL(f,dir),'utf8'))
+    assert.deepEqual(js.months,canon.months,f)
+    const a=js.items[0], b=canon.items[0]
+    assert.equal(a.sku,b.sku,f); assert.equal(a.name,b.name,f); assert.equal(a.on_hand,b.on_hand,f)
+    assert.deepEqual([...a.monthly_sales],[...b.monthly_sales],f)
+    const py=JSON.parse(execFileSync(process.env.PYTHON||'python3',['-c',`import sys,types,json;from pathlib import Path;p=types.ModuleType('stock_runway');p.__path__=['.'];sys.modules['stock_runway']=p;from stock_runway.sources import load_csv;d=load_csv(sys.argv[1]);i=d['items'][0];print(json.dumps([d['months'],i['sku'],i['name'],i['unit'],i['on_hand'],i['supplier_days'],i['monthly_sales'],i.get('category')]))`,new URL(f,dir).pathname],{encoding:'utf8'}))
+    assert.deepEqual([[...js.months],a.sku,a.name,a.unit,a.on_hand,a.supplier_days,[...a.monthly_sales],a.category ?? null],py,f)
+  }
+  for (const [label,want] of [['Jan 2026','2026-01'],['January 2026','2026-01'],['Jan-26','2026-01'],['01/2026','2026-01'],['2026/01','2026-01'],['Sept 2026','2026-09'],['Price',null],['2026-13',null],['Janx 2026',null]]) assert.equal(context.helpers.erpMonth(label),want,label)
+  assert.throws(()=>parseCsv('Item Name,Qty On Hand,Jan 2026,Feb 2026,Mar 2026\nW,5,1,2,3\n'),/ERP names/)
 })
