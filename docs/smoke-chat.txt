@@ -1,0 +1,278 @@
+Registered-handler harness, NOT a model-backed Hermes chat.
+Scratch package: .scratch/home/plugins/stock-runway
+No auth stores accessed; network denied; register(ctx) and registered stock_runway handler called.
+{
+  "source": "sample",
+  "as_of": "2026-10-31",
+  "horizon": 6,
+  "disclosure": "No receipts recorded; assumes nothing is on order.",
+  "items": [
+    {
+      "sku": "SEAL-CLR-300",
+      "name": "Clear silicone sealant, 300 ml",
+      "unit": "units",
+      "stock": 25860,
+      "monthly_demand": 4911,
+      "runout_month": "2027-04",
+      "runout_day": "2027-04-08",
+      "order_by": null,
+      "error_percent": 9,
+      "grade": "Usable for planning",
+      "projection": [
+        {
+          "month": "2026-11",
+          "demand": 4911,
+          "receipts": 0,
+          "stock": 20949
+        },
+        {
+          "month": "2026-12",
+          "demand": 4911,
+          "receipts": 0,
+          "stock": 16038
+        },
+        {
+          "month": "2027-01",
+          "demand": 4911,
+          "receipts": 0,
+          "stock": 11127
+        },
+        {
+          "month": "2027-02",
+          "demand": 4911,
+          "receipts": 0,
+          "stock": 6216
+        },
+        {
+          "month": "2027-03",
+          "demand": 4911,
+          "receipts": 0,
+          "stock": 1305
+        },
+        {
+          "month": "2027-04",
+          "demand": 4911,
+          "receipts": 0,
+          "stock": -3606
+        }
+      ],
+      "receipts": {},
+      "held": false
+    },
+    {
+      "sku": "UL-FOAM-GRN",
+      "name": "Foam floor underlay, green",
+      "unit": "m",
+      "stock": 8269,
+      "monthly_demand": 12571,
+      "runout_month": "2026-11",
+      "runout_day": "2026-11-20",
+      "order_by": null,
+      "error_percent": 15,
+      "grade": "Usable for planning",
+      "projection": [
+        {
+          "month": "2026-11",
+          "demand": 12571,
+          "receipts": 0,
+          "stock": -4302
+        },
+        {
+          "month": "2026-12",
+          "demand": 12571,
+          "receipts": 0,
+          "stock": -16873
+        },
+        {
+          "month": "2027-01",
+          "demand": 12571,
+          "receipts": 0,
+          "stock": -29444
+        },
+        {
+          "month": "2027-02",
+          "demand": 12571,
+          "receipts": 0,
+          "stock": -42015
+        },
+        {
+          "month": "2027-03",
+          "demand": 12571,
+          "receipts": 0,
+          "stock": -54586
+        },
+        {
+          "month": "2027-04",
+          "demand": 12571,
+          "receipts": 0,
+          "stock": -67157
+        }
+      ],
+      "receipts": {},
+      "held": false
+    },
+    {
+      "sku": "GRT-GRY-5",
+      "name": "Tile grout, grey, 5 kg",
+      "unit": "units",
+      "stock": 1863,
+      "monthly_demand": 600,
+      "runout_month": "2027-02",
+      "runout_day": "2027-02-03",
+      "order_by": null,
+      "error_percent": 13,
+      "grade": "Usable for planning",
+      "projection": [
+        {
+          "month": "2026-11",
+          "demand": 600,
+          "receipts": 0,
+          "stock": 1263
+        },
+        {
+          "month": "2026-12",
+          "demand": 600,
+          "receipts": 0,
+          "stock": 663
+        },
+        {
+          "month": "2027-01",
+          "demand": 600,
+          "receipts": 0,
+          "stock": 63
+        },
+        {
+          "month": "2027-02",
+          "demand": 600,
+          "receipts": 0,
+          "stock": -537
+        },
+        {
+          "month": "2027-03",
+          "demand": 600,
+          "receipts": 0,
+          "stock": -1137
+        },
+        {
+          "month": "2027-04",
+          "demand": 600,
+          "receipts": 0,
+          "stock": -1737
+        }
+      ],
+      "receipts": {},
+      "held": false
+    },
+    {
+      "sku": "TRM-ALU-25",
+      "name": "Aluminium edge trim",
+      "unit": "m",
+      "stock": 1125,
+      "monthly_demand": 229,
+      "runout_month": "2027-03",
+      "runout_day": "2027-03-29",
+      "order_by": null,
+      "error_percent": 21,
+      "grade": "Use with care",
+      "projection": [
+        {
+          "month": "2026-11",
+          "demand": 229,
+          "receipts": 0,
+          "stock": 896
+        },
+        {
+          "month": "2026-12",
+          "demand": 229,
+          "receipts": 0,
+          "stock": 667
+        },
+        {
+          "month": "2027-01",
+          "demand": 229,
+          "receipts": 0,
+          "stock": 438
+        },
+        {
+          "month": "2027-02",
+          "demand": 229,
+          "receipts": 0,
+          "stock": 209
+        },
+        {
+          "month": "2027-03",
+          "demand": 229,
+          "receipts": 0,
+          "stock": -20
+        },
+        {
+          "month": "2027-04",
+          "demand": 229,
+          "receipts": 0,
+          "stock": -249
+        }
+      ],
+      "receipts": {},
+      "held": false
+    },
+    {
+      "sku": "SEAL-WHT-300",
+      "name": "White silicone sealant, 300 ml",
+      "unit": "units",
+      "stock": 548,
+      "monthly_demand": 391,
+      "runout_month": "2026-12",
+      "runout_day": "2026-12-13",
+      "order_by": null,
+      "error_percent": 75,
+      "grade": "Too far off to plan on",
+      "projection": [
+        {
+          "month": "2026-11",
+          "demand": 391,
+          "receipts": 0,
+          "stock": 157
+        },
+        {
+          "month": "2026-12",
+          "demand": 391,
+          "receipts": 0,
+          "stock": -234
+        },
+        {
+          "month": "2027-01",
+          "demand": 391,
+          "receipts": 0,
+          "stock": -625
+        },
+        {
+          "month": "2027-02",
+          "demand": 391,
+          "receipts": 0,
+          "stock": -1016
+        },
+        {
+          "month": "2027-03",
+          "demand": 391,
+          "receipts": 0,
+          "stock": -1407
+        },
+        {
+          "month": "2027-04",
+          "demand": 391,
+          "receipts": 0,
+          "stock": -1798
+        }
+      ],
+      "receipts": {},
+      "held": false
+    }
+  ],
+  "summary": [
+    "SEAL-CLR-300: runs out Apr 2027; Usable for planning",
+    "UL-FOAM-GRN: runs out Nov 2026; Usable for planning",
+    "GRT-GRY-5: runs out Feb 2027; Usable for planning",
+    "TRM-ALU-25: runs out Mar 2027; Use with care",
+    "SEAL-WHT-300: runs out Dec 2026; Too far off to plan on"
+  ]
+}

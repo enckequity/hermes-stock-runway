@@ -1,0 +1,426 @@
+"""Sample, bounded local CSV, and read-only Odoo inventory sources."""
+from __future__ import annotations
+
+import csv
+import json
+import math
+import re
+import ssl
+import xmlrpc.client
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
+from types import MappingProxyType
+from urllib.parse import urlsplit
+
+from .engine import month_after, valid_month, MONTH_RANGE_REASON, MAX_QUANTITY, MAX_SUPPLIER_DAYS
+from pathlib import Path
+
+MAX_CSV_BYTES = 2 * 1024 * 1024
+MAX_ROWS = 10000
+MONTH_RE = re.compile(r"^[1-9]\d{3}-(0[1-9]|1[0-2])$")
+
+
+class SourceError(ValueError):
+    pass
+
+
+def load_sample(path: Path | None = None) -> dict:
+    path = path or Path(__file__).parent / "data" / "sample.json"
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        raise SourceError("The bundled sample data could not be read.") from None
+    return data
+
+
+def _number(raw: str, row: int, column: str, *, nullable: bool = False):
+    if raw == "" and nullable:
+        return None
+    if not isinstance(raw, str) or not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", raw.strip()):
+        raise SourceError(f"Row {row}: {column} must be a number.")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise SourceError(f"Row {row}: {column} must be a number.") from None
+    if not math.isfinite(value) or value < 0:
+        raise SourceError(f"Row {row}: {column} must be a non-negative number.")
+    limit = MAX_SUPPLIER_DAYS if column == "supplier_days" else MAX_QUANTITY
+    if value > limit:
+        raise SourceError(f"Row {row}: {column} must be no greater than {limit}.")
+    return int(value) if value.is_integer() else value
+
+
+def load_csv(path: str, receipts_path: str | None = None) -> dict:
+    if not isinstance(path, str) or not path.strip():
+        raise SourceError("CSV source requires an explicit local csv_path.")
+    try:
+        file_path = Path(path).expanduser().resolve(strict=True)
+        if not file_path.is_file() or file_path.stat().st_size > MAX_CSV_BYTES:
+            raise SourceError("CSV must be a local file no larger than 2 MiB.")
+        with file_path.open("r", newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle, strict=True)
+            headers = reader.fieldnames or []
+            fixed = ["sku", "name", "unit", "on_hand", "supplier_days"]
+            if headers[:5] != fixed:
+                raise SourceError("CSV columns must begin: sku,name,unit,on_hand,supplier_days.")
+            extra = headers[5:]
+            months = [h for h in extra if h != "category" and not h.startswith("rcv:")]
+            if len(months) < 3 or any(not MONTH_RE.fullmatch(m) for m in months):
+                raise SourceError("Add at least three YYYY-MM monthly sales columns after supplier_days.")
+            if any(not valid_month(m) for m in months):
+                raise SourceError(MONTH_RANGE_REASON)
+            if sorted(months) != months or len(set(months)) != len(months):
+                raise SourceError("Monthly sales columns must be unique and in chronological order.")
+            if any(month_after(months[i - 1], 1) != months[i] for i in range(1, len(months))):
+                raise SourceError("Monthly sales columns must be consecutive full months.")
+            receipt_columns = [h for h in extra if h.startswith("rcv:")]
+            if extra.count("category") > 1:
+                raise SourceError("Category column must be unique.")
+            if receipt_columns and (len(set(receipt_columns)) != len(receipt_columns)
+                    or any(not MONTH_RE.fullmatch(h[4:]) for h in receipt_columns)
+                    or set(h[4:] for h in receipt_columns) != set(months)):
+                raise SourceError("Receipt columns must be unique valid rcv:YYYY-MM columns covering every sales month exactly.")
+            items = []
+            seen = set()
+            for rownum, row in enumerate(reader, 2):
+                if len(items) >= MAX_ROWS:
+                    raise SourceError("CSV contains more than 10000 rows.")
+                if None in row or any(row.get(key) is None for key in headers):
+                    raise SourceError(f"Row {rownum}: column count does not match the header.")
+                if any(not row[k].strip() for k in fixed[:3]):
+                    raise SourceError(f"Row {rownum}: sku, name, and unit are required.")
+                if row["sku"].strip() in seen:
+                    raise SourceError(f"Row {rownum}: duplicate sku.")
+                seen.add(row["sku"].strip())
+                items.append({"sku": row["sku"].strip(), "name": row["name"].strip(), "unit": row["unit"].strip(),
+                              "on_hand": _number(row["on_hand"], rownum, "on_hand"),
+                              "supplier_days": _number(row["supplier_days"], rownum, "supplier_days", nullable=True),
+                              "monthly_sales": [_number(row[m], rownum, m) for m in months], "receipts": {}})
+                if "category" in extra:
+                    items[-1]["category"] = row["category"].strip()
+                if receipt_columns:
+                    items[-1]["historical_receipts"] = {h[4:]: _number(row[h], rownum, h) for h in receipt_columns}
+    except SourceError:
+        raise
+    except (OSError, UnicodeError, csv.Error):
+        raise SourceError("Could not read the local CSV file.") from None
+    if not items:
+        raise SourceError("CSV has no item rows.")
+    if receipts_path:
+        load_receipts(receipts_path, months, items)
+    return {"as_of": _month_end(months[-1]), "months": months, "items": items}
+
+
+def _month_end(month: str) -> str:
+    from calendar import monthrange
+    year, number = map(int, month.split("-"))
+    return date(year, number, monthrange(year, number)[1]).isoformat()
+
+
+def load_receipts(path: str, months: list[str], items: list[dict]) -> None:
+    try:
+        p = Path(path).expanduser().resolve(strict=True)
+        if not p.is_file() or p.stat().st_size > MAX_CSV_BYTES:
+            raise SourceError("Receipts CSV must be a local file no larger than 2 MiB.")
+        with p.open("r", newline="", encoding="utf-8-sig") as handle:
+            reader = csv.DictReader(handle, strict=True)
+            if reader.fieldnames != ["sku", "month", "quantity"]:
+                raise SourceError("Receipts CSV columns must be: sku,month,quantity.")
+            by_sku = {item["sku"]: item for item in items}
+            for rownum, row in enumerate(reader, 2):
+                if rownum > MAX_ROWS + 1:
+                    raise SourceError("Receipts CSV contains more than 10000 rows.")
+                if None in row or any(v is None for v in row.values()):
+                    raise SourceError(f"Receipts row {rownum}: column count does not match the header.")
+                if row["sku"] not in by_sku or not MONTH_RE.fullmatch(row["month"]) or row["month"] > month_after(months[-1], 12):
+                    raise SourceError(f"Receipts row {rownum}: SKU is unknown or month is invalid or beyond the 12-month horizon.")
+                if row["month"] <= months[-1]:
+                    raise SourceError(f"Receipts row {rownum}: month must be after the last sales month.")
+                quantity = _number(row["quantity"], rownum, "quantity")
+                total = by_sku[row["sku"]]["receipts"].get(row["month"], 0) + quantity
+                if total > MAX_QUANTITY:
+                    raise SourceError(f"Receipts row {rownum}: monthly total must be no greater than {MAX_QUANTITY}.")
+                by_sku[row["sku"]]["receipts"][row["month"]] = total
+    except SourceError:
+        raise
+    except (OSError, UnicodeError, csv.Error, KeyError, TypeError):
+        raise SourceError("Could not read the local receipts CSV file.") from None
+
+
+ALLOWED_METHODS = frozenset({"search_read"})
+ALLOWED_DOMAIN_FIELDS = frozenset({"default_code", "usage", "product_id", "location_id", "location_dest_id", "state", "date", "product_tmpl_id", "id"})
+ALLOWED_FIELDS = MappingProxyType({
+    "uom.uom": frozenset({"id", "factor", "category_id", "parent_path"}),
+    "stock.location": frozenset({"id", "usage"}),
+    "stock.move": frozenset({"product_id", "product_uom_qty", "product_uom", "quantity", "date", "state", "location_id", "location_dest_id"}),
+    "stock.quant": frozenset({"product_id", "quantity", "location_id"}),
+    "product.product": frozenset({"id", "name", "default_code", "uom_id", "product_tmpl_id", "categ_id"}),
+    "product.supplierinfo": frozenset({"product_tmpl_id", "product_id", "delay"}),
+})
+
+
+class OdooReadOnly:
+    """Only the authentication handshake and field-guarded inventory reads."""
+
+    def __init__(self, secret_getter=None, server_proxy_factory=None, transport_factory=None):
+        self.secret_getter = secret_getter
+        self.server_proxy_factory = server_proxy_factory or xmlrpc.client.ServerProxy
+        self.transport_factory = transport_factory or _SafeTransport
+        self._credentials = None
+        self._uom19 = False
+
+    def _secret(self, name):
+        try:
+            getter = self.secret_getter
+            if getter is None:
+                from agent.secret_scope import get_secret
+                getter = get_secret
+            value = getter(name)
+            if not isinstance(value, str) or not value:
+                raise ValueError
+            return value
+        except Exception:
+            raise SourceError("Odoo connection is not configured in Hermes secrets.") from None
+
+    def _call(self, proxy, model, method, args, kwargs):
+        # Validate before looking up any transport attribute, even for fields_get.
+        if method not in ALLOWED_METHODS:
+            raise SourceError("Odoo write or unsupported operations are not allowed.")
+        if model not in ALLOWED_FIELDS:
+            raise SourceError("Odoo model is not allowed.")
+        fields = kwargs.get("fields")
+        if not isinstance(fields, (list, tuple)) or not fields or any(f not in ALLOWED_FIELDS[model] for f in fields):
+            raise SourceError("Odoo field is not allowed.")
+        if not isinstance(args, (list, tuple)) or len(args) != 1 or not isinstance(args[0], list):
+            raise SourceError("Odoo query arguments are not allowed.")
+        for leaf in args[0]:
+            if isinstance(leaf, str) and leaf in ("&", "|", "!"):
+                continue
+            if (not isinstance(leaf, (list, tuple)) or len(leaf) != 3
+                    or not isinstance(leaf[0], str) or leaf[0] not in ALLOWED_DOMAIN_FIELDS):
+                raise SourceError("Odoo domain field is not allowed.")
+        if set(kwargs) - {"fields", "limit", "offset", "order", "context"} or kwargs.get("order") not in ("id", None):
+            raise SourceError("Odoo query option is not allowed.")
+        if "context" in kwargs:
+            context = kwargs["context"]
+            if (model != "uom.uom" or not isinstance(context, dict)
+                    or set(context) != {"active_test"} or context["active_test"] is not False):
+                raise SourceError("Odoo query option is not allowed.")
+        try:
+            db, uid, key = self._credentials
+            return proxy.execute_kw(db, uid, key, model, method, args, kwargs)
+        except xmlrpc.client.Fault as exc:
+            # Only field absence triggers the compatibility retry; contents never escape.
+            message = str(exc.faultString).lower()
+            if model == "stock.move" and "quantity" in fields and "quantity" in message and any(x in message for x in ("invalid field", "unknown field", "does not exist")):
+                fallback = [f for f in fields if f != "quantity"]
+                return self._call(proxy, model, method, args, {**kwargs, "fields": fallback})
+            if model == "uom.uom" and "category_id" in fields and "category_id" in message and any(x in message for x in ("invalid field", "unknown field", "does not exist")):
+                self._uom19 = True
+                return self._call(proxy, model, method, args, {**kwargs, "fields": ["id", "factor", "parent_path"]})
+            raise SourceError("Odoo could not return the requested inventory data.") from None
+        except Exception:
+            raise SourceError("Odoo could not return the requested inventory data.") from None
+
+    def _authenticate(self, common, db, user, key):
+        try:
+            uid = common.authenticate(db, user, key, {})
+            if not isinstance(uid, int) or isinstance(uid, bool) or uid <= 0:
+                raise ValueError
+            return uid
+        except Exception:
+            raise SourceError("Odoo authentication failed.") from None
+
+    def _read(self, proxy, model, domain, fields):
+        # Explicit pagination prevents server defaults from silently truncating stock.
+        rows = []
+        for offset in range(0, 100000, 1000):
+            options = {"fields": fields, "offset": offset, "limit": 1000, "order": "id"}
+            if model == "uom.uom":
+                options["context"] = {"active_test": False}
+                if self._uom19:
+                    options["fields"] = ["id", "factor", "parent_path"]
+            batch = self._call(proxy, model, "search_read", [domain], options)
+            if not isinstance(batch, list):
+                raise SourceError("Odoo returned incomplete inventory data.")
+            rows.extend(batch)
+            if len(batch) < 1000:
+                return rows
+        raise SourceError("Odoo inventory exceeds the safe read limit; narrow the SKU list.")
+
+    def load(self, skus=None, *, today=None):
+        if not isinstance(skus, list) or not 1 <= len(skus) <= 50 or any(not isinstance(s, str) or not s.strip() for s in skus):
+            raise SourceError("Odoo requires a list of 1 to 50 product SKUs.")
+        self._uom19 = False  # Schema selection belongs to this load, not a previous server.
+        url, db, user, key = (self._secret(n) for n in ("ODOO_URL", "ODOO_DB", "ODOO_USER", "ODOO_API_KEY"))
+        try:
+            parsed = urlsplit(url)
+            if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise ValueError
+            parsed.port
+        except ValueError:
+            raise SourceError("Odoo requires an HTTPS server URL without credentials, query or fragment.") from None
+        try:
+            common = self.server_proxy_factory(url.rstrip("/") + "/xmlrpc/2/common", transport=self.transport_factory(), allow_none=True)
+            uid = self._authenticate(common, db, user, key)
+            self._credentials = (db, uid, key)
+            proxy = self.server_proxy_factory(url.rstrip("/") + "/xmlrpc/2/object", transport=self.transport_factory(), allow_none=True)
+            products = self._read(proxy, "product.product", [("default_code", "in", skus)], sorted(ALLOWED_FIELDS["product.product"]))
+            if set(skus) - {p.get("default_code") for p in products}:
+                raise SourceError("One or more requested SKUs were not found.")
+            seen_codes = set()
+            for product in products:
+                sku = product.get("default_code")
+                if sku in seen_codes:
+                    raise SourceError(f"Duplicate Odoo SKU: {sku}.")
+                seen_codes.add(sku)
+            locations = self._read(proxy, "stock.location", [("usage", "in", ["internal", "customer", "supplier"])], ["id", "usage"])
+            internal = [r["id"] for r in locations if r["usage"] == "internal"]
+            ids = [p["id"] for p in products]
+            now = today or datetime.now(timezone.utc).date()
+            last = month_after(now.strftime("%Y-%m"), -1)
+            first = month_after(last, -11)
+            quants = self._read(proxy, "stock.quant", [("product_id", "in", ids), ("location_id", "in", internal)], ["product_id", "quantity", "location_id"])
+            moves = self._read(proxy, "stock.move", [("product_id", "in", ids), ("state", "=", "done"), ("date", ">=", first + "-01 00:00:00")], sorted(ALLOWED_FIELDS["stock.move"]))
+            uom_ids = {_relation(p.get("uom_id")) for p in products}
+            uom_ids.update(_relation(m.get("product_uom")) for m in moves)
+            uoms = self._read(proxy, "uom.uom", [("id", "in", sorted(i for i in uom_ids if i))], ["id", "factor", "category_id"])
+            templates = [_relation(p.get("product_tmpl_id")) for p in products]
+            try:
+                suppliers = self._read(proxy, "product.supplierinfo", [("product_tmpl_id", "in", templates)], sorted(ALLOWED_FIELDS["product.supplierinfo"])) if all(templates) else []
+            except SourceError:
+                suppliers = []  # Optional lead time remains unknown when access is unavailable.
+            return _odoo_dataset(products, moves, quants, locations, suppliers, uoms=uoms, uom19=self._uom19, today=now)
+        except SourceError:
+            raise
+        except Exception:
+            raise SourceError("Odoo returned incomplete inventory data or the connection failed.") from None
+        finally:
+            self._credentials = None
+
+
+class _SafeTransport(xmlrpc.client.SafeTransport):
+    def __init__(self):
+        super().__init__(context=ssl.create_default_context())
+
+    def make_connection(self, host):
+        connection = super().make_connection(host)
+        connection.timeout = 30
+        return connection
+
+
+def _relation(value):
+    return value[0] if isinstance(value, (list, tuple)) and value else value
+
+
+def _odoo_dataset(products, moves, quants, locations, suppliers=(), *, uoms=(), uom19=False, today=None):
+    now = today or datetime.now(timezone.utc).date()
+    last = month_after(now.strftime("%Y-%m"), -1)
+    months = [month_after(last, i - 11) for i in range(12)]
+    internal = {r["id"] for r in locations if r["usage"] == "internal"}
+    customer = {r["id"] for r in locations if r["usage"] == "customer"}
+    vendor = {r["id"] for r in locations if r["usage"] == "supplier"}
+    if not internal or not customer:
+        raise SourceError("Odoo internal and customer locations are required.")
+    items = []
+    units = {unit["id"]: unit for unit in uoms}
+    for product in products:
+        pid = product["id"]
+        monthly = dict.fromkeys(months, Decimal(0))
+        incoming = dict.fromkeys(months, Decimal(0))
+        history_complete = bool(vendor)
+        hold_reason = None
+        product_unit = units.get(_relation(product.get("uom_id")), {})
+        stock = Decimal(0)
+        limit_reason = "Quantities and monthly totals must be no greater than 1000000000000."
+        for quant in quants:
+            if _relation(quant["product_id"]) != pid or _relation(quant["location_id"]) not in internal:
+                continue
+            try:
+                amount = Decimal(str(quant["quantity"]))
+                if not amount.is_finite() or abs(amount) > MAX_QUANTITY:
+                    raise ValueError
+                stock += amount
+                if abs(stock) > MAX_QUANTITY:
+                    raise ValueError
+            except (InvalidOperation, ValueError, TypeError):
+                hold_reason = limit_reason
+                stock = Decimal(0)
+        for move in moves:
+            if _relation(move["product_id"]) != pid or move["state"] != "done":
+                continue
+            month = datetime.fromisoformat(move["date"].replace("Z", "+00:00")).strftime("%Y-%m")
+            src, dst = _relation(move["location_id"]), _relation(move["location_dest_id"])
+            rollback = ((src in internal) - (dst in internal)) if month > last else 0
+            sale = ((src in internal and dst in customer) - (src in customer and dst in internal)) if month in monthly else 0
+            receipt = src in vendor and dst in internal and month in monthly
+            if not rollback and not sale and not receipt:
+                continue  # Internal transfers and other irrelevant moves need no unit conversion.
+            receipt_only = receipt and not rollback and not sale
+            try:
+                quantity = Decimal(str(move["quantity"] if "quantity" in move else move["product_uom_qty"]))
+            except (InvalidOperation, ValueError, TypeError):
+                if not receipt_only:
+                    raise
+                history_complete = False
+                continue
+            if not quantity.is_finite() or quantity < 0:
+                if receipt_only:
+                    history_complete = False
+                    continue
+                raise SourceError("Odoo returned invalid move quantities.")
+            move_unit = units.get(_relation(move.get("product_uom")), {})
+            factors = [move_unit.get("factor"), product_unit.get("factor")]
+            if uom19:
+                paths = [unit.get("parent_path") for unit in (move_unit, product_unit)]
+                references = [path.split("/")[0] if isinstance(path, str) else None for path in paths]
+            else:
+                references = [_relation(unit.get("category_id")) for unit in (move_unit, product_unit)]
+            if (not references[0] or references[0] != references[1]
+                    or any(isinstance(f, bool) or not isinstance(f, (int, float)) or not math.isfinite(f) or f <= 0 for f in factors)):
+                if receipt_only:
+                    history_complete = False
+                else:
+                    hold_reason = "Some moves use a unit that cannot be converted."
+                continue
+            if uom19:
+                # Odoo 19 _compute_quantity: qty * self.factor / to_unit.factor (no rounding).
+                quantity = quantity * Decimal(str(factors[0])) / Decimal(str(factors[1]))
+            else:
+                # Odoo 17/18 factors are the inverse of the Odoo 19 convention.
+                quantity = quantity / Decimal(str(factors[0])) * Decimal(str(factors[1]))
+            if not quantity.is_finite() or quantity > MAX_QUANTITY:
+                if receipt_only:
+                    history_complete = False
+                else:
+                    hold_reason = limit_reason
+                continue
+            if rollback:
+                stock += quantity * rollback
+                if abs(stock) > MAX_QUANTITY:
+                    hold_reason = limit_reason
+                    stock = Decimal(0)
+            else:
+                monthly[month] += quantity * sale
+                if abs(monthly[month]) > MAX_QUANTITY:
+                    hold_reason = limit_reason
+                    monthly[month] = Decimal(0)
+                if receipt:
+                    incoming[month] += quantity
+                    if incoming[month] > MAX_QUANTITY:
+                        history_complete = False
+                        incoming[month] = Decimal(0)
+        delays = [float(s["delay"]) for s in suppliers if _relation(s.get("product_tmpl_id")) == _relation(product.get("product_tmpl_id")) and (not s.get("product_id") or _relation(s["product_id"]) == pid) and isinstance(s.get("delay"), (float, int)) and not isinstance(s["delay"], bool) and math.isfinite(s["delay"]) and s["delay"] > 0]
+        if delays and max(delays) > MAX_SUPPLIER_DAYS:
+            hold_reason = "Supplier days must be from 0 to 3650 when supplied."
+        items.append({"sku": product["default_code"], "name": product["name"], "unit": product["uom_id"][1],
+                      "on_hand": float(stock), "supplier_days": max(delays) if delays else None,
+                      "monthly_sales": [float(value) for value in monthly.values()], "receipts": {}})
+        category = product.get("categ_id")
+        items[-1]["category"] = category[1] if isinstance(category, (list, tuple)) and len(category) > 1 and isinstance(category[1], str) else ""
+        if history_complete:
+            items[-1]["historical_receipts"] = {month: float(value) for month, value in incoming.items()}
+        if hold_reason:
+            items[-1]["hold_reason"] = hold_reason
+    return {"as_of": _month_end(last), "months": months, "items": items}
