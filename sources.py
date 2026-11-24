@@ -293,7 +293,7 @@ class OdooReadOnly:
                 raise ValueError
             return value
         except Exception:
-            raise SourceError("Odoo connection is not configured in Hermes secrets.") from None
+            raise SourceError("Odoo connection is not configured in the workspace secrets.") from None
 
     def _call(self, proxy, model, method, args, kwargs):
         # Validate before looking up any transport attribute, even for fields_get.

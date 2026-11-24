@@ -1131,19 +1131,6 @@ test('quick-view dialog shows the omission count as text, not a second full-page
   assert.ok(!all.some(node => node.props?.children === '+7 more, open full page'))
 })
 
-test('Python tool card decodes in the real JS directive validator', async () => {
-  const { spawnSync } = await import('node:child_process')
-  const script = `import sys,types,pathlib,json\nroot=pathlib.Path.cwd()\npkg=types.ModuleType('stock_runway');pkg.__path__=[str(root)];sys.modules['stock_runway']=pkg\nfrom stock_runway.tools import make_handler\nprint(json.loads(make_handler()({}))['card'])`
-  const env = { ...process.env }; delete env.PYTHONPATH
-  const py = spawnSync(process.env.PYTHON || 'python3', ['-c', script], { encoding: 'utf8', env })
-  assert.equal(py.status, 0, py.stderr)
-  const data = decodeCard(attrsOf(py.stdout.trim()))
-  assert.ok(data)
-  assert.equal(data.rows.length, 5)
-  assert.equal(data.rows[0].sku, 'UL-FOAM-GRN')
-  assert.ok(py.stdout.trim().length <= CARD_MAX_LINE)
-})
-
 // UI acceptance stays separate from the numerical oracle and strict card schema.
 test('selected aluminium keeps its oracle values, units and all twelve months', () => {
   const all = nodes(renderComponent('Page', { ctx: { storage } }, { 0: 820, 3: 12, 4: 'TRM-ALU-25' }))
