@@ -16,6 +16,25 @@ from urllib.parse import urlsplit
 from .engine import month_after, valid_month, MONTH_RANGE_REASON, MAX_QUANTITY, MAX_SUPPLIER_DAYS
 from pathlib import Path
 
+
+def _file_safety():
+    """The host's file_safety module when running inside the agent runtime, else None (standalone use stays stdlib only)."""
+    try:
+        import importlib
+
+        return importlib.import_module("agent.file_safety")
+    except Exception:
+        return None
+
+
+def _refuse_protected(path: Path) -> None:
+    """Refuse credential stores, .env files and device files the host's own read tools refuse, before any read.
+
+    The message is neutral: it never repeats the path or the host's wording."""
+    safety = _file_safety()
+    if safety is not None and safety.get_read_block_error(str(path)):
+        raise SourceError("That file is protected and cannot be read here. Choose an inventory CSV export.")
+
 MAX_CSV_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 10000
 MONTH_RE = re.compile(r"^[1-9]\d{3}-(0[1-9]|1[0-2])$")
@@ -162,7 +181,9 @@ def load_csv(path: str, receipts_path: str | None = None) -> dict:
     if not isinstance(path, str) or not path.strip():
         raise SourceError("CSV source requires an explicit local csv_path.")
     try:
+        _refuse_protected(Path(path).expanduser().absolute())
         file_path = Path(path).expanduser().resolve(strict=True)
+        _refuse_protected(file_path)
         if not file_path.is_file() or file_path.stat().st_size > MAX_CSV_BYTES:
             raise SourceError("CSV must be a local file no larger than 2 MiB.")
         with file_path.open("r", newline="", encoding="utf-8-sig") as raw_handle:
@@ -232,7 +253,9 @@ def _month_end(month: str) -> str:
 
 def load_receipts(path: str, months: list[str], items: list[dict]) -> None:
     try:
+        _refuse_protected(Path(path).expanduser().absolute())
         p = Path(path).expanduser().resolve(strict=True)
+        _refuse_protected(p)
         if not p.is_file() or p.stat().st_size > MAX_CSV_BYTES:
             raise SourceError("Receipts CSV must be a local file no larger than 2 MiB.")
         with p.open("r", newline="", encoding="utf-8-sig") as handle:
