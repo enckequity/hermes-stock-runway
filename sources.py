@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import io
 import json
 import math
@@ -17,23 +18,36 @@ from .engine import month_after, valid_month, MONTH_RANGE_REASON, MAX_QUANTITY, 
 from pathlib import Path
 
 
-def _file_safety():
-    """The host's file_safety module when running inside the agent runtime, else None (standalone use stays stdlib only)."""
-    try:
-        import importlib
+_STANDALONE = object()
+_PROTECTED = "That file is protected and cannot be read here. Choose an inventory CSV export."
 
+
+def _file_safety():
+    """The host's file_safety module inside the agent runtime; _STANDALONE only when the host package is absent.
+
+    Any other import failure returns None, and the caller then refuses every path (fail closed)."""
+    try:
         return importlib.import_module("agent.file_safety")
+    except ModuleNotFoundError as exc:
+        return _STANDALONE if exc.name in ("agent", "agent.file_safety") else None
     except Exception:
         return None
 
 
 def _refuse_protected(path: Path) -> None:
-    """Refuse credential stores, .env files and device files the host's own read tools refuse, before any read.
+    """Refuse credential stores, secrets files and device files the host's own read tools refuse, before any read.
 
     The message is neutral: it never repeats the path or the host's wording."""
     safety = _file_safety()
-    if safety is not None and safety.get_read_block_error(str(path)):
-        raise SourceError("That file is protected and cannot be read here. Choose an inventory CSV export.")
+    if safety is _STANDALONE:
+        return
+    try:
+        blocked = safety.get_read_block_error(str(path))
+    except Exception:
+        blocked = True
+    if blocked:
+        raise SourceError(_PROTECTED)
+
 
 MAX_CSV_BYTES = 2 * 1024 * 1024
 MAX_ROWS = 10000

@@ -65,7 +65,7 @@ def test_receipts_path_is_guarded_too(tmp_path, host_guard):
     secret.write_text("sku,month,quantity\nA,2026-04,4\n", encoding="utf-8")
     with pytest.raises(SourceError) as exc:
         load_csv(str(sales), str(secret))
-    _assert_refused(exc)
+    _assert_refused(exc, str(secret))
 
 
 def test_ordinary_csv_still_loads_under_the_guard(tmp_path, host_guard):
@@ -73,3 +73,52 @@ def test_ordinary_csv_still_loads_under_the_guard(tmp_path, host_guard):
     sales.write_text(GOOD, encoding="utf-8")
     assert load_csv(str(sales))
     assert host_guard
+
+
+def test_blocked_link_name_is_refused_before_resolving(tmp_path, monkeypatch):
+    """The literal path is checked too, not only the resolved target."""
+    target = tmp_path / "plain.csv"
+    target.write_text(GOOD, encoding="utf-8")
+    link = tmp_path / "blocked-name.csv"
+    link.symlink_to(target)
+    agent = types.ModuleType("agent")
+    safety = types.ModuleType("agent.file_safety")
+    safety.get_read_block_error = lambda path: "no" if Path(path).name == "blocked-name.csv" else None
+    monkeypatch.setitem(sys.modules, "agent", agent)
+    monkeypatch.setitem(sys.modules, "agent.file_safety", safety)
+    with pytest.raises(SourceError) as exc:
+        load_csv(str(link))
+    _assert_refused(exc)
+
+
+@pytest.mark.parametrize("broken", ["import", "missing", "raises"])
+def test_broken_host_guard_fails_closed(tmp_path, monkeypatch, broken):
+    sales = tmp_path / "sales.csv"
+    sales.write_text(GOOD, encoding="utf-8")
+    agent = types.ModuleType("agent")
+    safety = types.ModuleType("agent.file_safety")
+    if broken == "raises":
+        def get_read_block_error(path):
+            raise RuntimeError("host bug")
+        safety.get_read_block_error = get_read_block_error
+    monkeypatch.setitem(sys.modules, "agent", agent)
+    if broken == "import":
+        # The host package is there but its guard fails to import (a missing dependency): not "standalone".
+        host = tmp_path / "host"
+        host.mkdir()
+        (host / "file_safety.py").write_text("import a_dependency_that_is_missing\n", encoding="utf-8")
+        agent.__path__ = [str(host)]
+        monkeypatch.delitem(sys.modules, "agent.file_safety", raising=False)
+    else:
+        monkeypatch.setitem(sys.modules, "agent.file_safety", safety)
+    with pytest.raises(SourceError) as exc:
+        load_csv(str(sales))
+    _assert_refused(exc, "host bug")
+
+
+def test_standalone_without_host_reads_normally(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "agent", None)
+    monkeypatch.delitem(sys.modules, "agent.file_safety", raising=False)
+    sales = tmp_path / "sales.csv"
+    sales.write_text(GOOD, encoding="utf-8")
+    assert load_csv(str(sales))
